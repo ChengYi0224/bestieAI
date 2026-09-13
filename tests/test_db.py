@@ -51,3 +51,26 @@ def test_save_and_get_messages(temp_db):
     assert len(recent) == 2
     assert recent[0]["content"] == "嗨！"
     assert recent[1]["content"] == "哈囉！"
+
+def test_should_update_summary():
+    from app.db import should_update_summary
+    from datetime import datetime, timedelta
+
+    # 1. 達 50 則門檻
+    assert should_update_summary({"new_messages_since_summary": 50}) is True
+    assert should_update_summary({"new_messages_since_summary": 49, "summary_updated_at": datetime.utcnow().isoformat()}) is False
+
+    # 2. 超過 14 天保底門檻
+    old_time = (datetime.utcnow() - timedelta(days=15)).isoformat()
+    assert should_update_summary({"new_messages_since_summary": 5, "summary_updated_at": old_time}) is True
+    # 超過 14 天但無新訊息
+    assert should_update_summary({"new_messages_since_summary": 0, "summary_updated_at": old_time}) is False
+
+def test_update_contact_summary(temp_db):
+    from app.db import update_contact_summary, get_contact_by_id
+    cid = get_or_create_contact("alex_test", "Alex", db_path=temp_db)
+    update_contact_summary(cid, "這是新的摘要卡內容", db_path=temp_db)
+    contact = get_contact_by_id(cid, db_path=temp_db)
+    assert contact["summary_card"] == "這是新的摘要卡內容"
+    assert contact["new_messages_since_summary"] == 0
+    assert contact["summary_updated_at"] is not None

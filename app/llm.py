@@ -59,3 +59,24 @@ class LLMClient:
             contents=prompt
         )
         return response.text
+
+    def update_summary(
+        self,
+        display_name: str,
+        old_summary: str,
+        new_conversations_text: str,
+        model: str = "gemini-3.8-flash"
+    ) -> str:
+        prompt = (
+            f"你是一位細心且深刻洞察人際關係的分析助理。我們已經有一份對『{display_name}』的現有關係摘要卡，"
+            "現在累積了一批新的對話紀錄。\n"
+            "請根據這批新對話『增量更新』摘要卡，保留過往重要記憶、更新目前的關係狀態與互動動態，勿隨意刪除重大歷史事件：\n\n"
+            f"【現有摘要卡】：\n{old_summary}\n\n"
+            f"【新增對話紀錄】：\n{new_conversations_text}\n\n"
+            "請輸出更新後的完整人物關係摘要卡："
+        )
+        response = self.client.models.generate_content(
+            model=model,
+            contents=prompt
+        )
+        return response.text

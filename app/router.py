@@ -29,26 +29,42 @@ class CommandRouter:
 
         command = parts[0].lower()
 
-        if command == "track":
+        HELP_TEXT = (
+            "【IG AI 陪聊機器人 指令清單】\n"
+            "• track <IG_ID>：首次追蹤對象並匯入近一個月聊天紀錄\n"
+            "• select <IG_ID>：切換目前作用中的討論對象\n"
+            "• sync [IG_ID]：增量同步最新訊息（滿 50 則自動更新摘要卡）\n"
+            "• refresh_summary [IG_ID]：手動強制更新人物關係摘要卡\n"
+            "• status：檢視目前對象的追蹤狀態與同步時間\n"
+            "• list：列出所有已追蹤對象\n"
+            "• untrack <IG_ID>：停止追蹤該對象（保留紀錄）\n"
+            "• help：查詢指令說明\n"
+            "• 直接輸入文字：與 AI 討論回覆策略（需先 select 對象）"
+        )
+
+        if command in ("help", "h", "?", "指令"):
+            return HELP_TEXT
+
+        elif command == "track":
             if len(parts) < 2:
-                return "請提供要追蹤的帳號，格式：track <IG_ID>"
+                return "格式錯誤！請提供要追蹤的帳號：track <IG_ID>\n（輸入 help 可查看所有指令）"
             target = parts[1]
             return f"TRACK_REQUEST:{target}"
 
         elif command == "select":
             if len(parts) < 2:
-                return "請提供要切換的帳號，格式：select <IG_ID>"
+                return "格式錯誤！請提供要切換的帳號：select <IG_ID>\n（輸入 help 可查看所有指令）"
             target = parts[1]
             success = set_active_contact(target, db_path=self.db_path)
             if success:
                 return f"目前作用對象已切換為 {target}"
             else:
-                return f"找不到已追蹤的對象 {target}，請先執行 track {target}"
+                return f"找不到已追蹤的對象 {target}，請先執行 track {target}\n（輸入 help 可查看所有指令）"
 
         elif command == "status":
             contact = get_active_contact(db_path=self.db_path)
             if not contact:
-                return "目前尚未選定任何作用對象（使用 select <IG_ID> 切換）。"
+                return "目前尚未選定任何作用對象，請使用 select <IG_ID> 切換。\n（輸入 help 可查看所有指令）"
             return (
                 f"【目前對話對象狀態】\n"
                 f"帳號：{contact['ig_account_id']}\n"
@@ -66,19 +82,35 @@ class CommandRouter:
             rows = cursor.fetchall()
             conn.close()
             if not rows:
-                return "目前尚未追蹤任何對象。"
+                return "目前尚未追蹤任何對象，請使用 track <IG_ID> 開始追蹤。\n（輸入 help 可查看所有指令）"
             lines = ["【已追蹤對象清單】"]
             for r in rows:
                 lines.append(f"- {r['ig_account_id']} ({r['display_name']}) [{r['status']}]")
             return "\n".join(lines)
 
         elif command == "refresh_summary":
-            target = parts[1] if len(parts) > 1 else None
-            return f"REFRESH_SUMMARY_REQUEST:{target}" if target else "請指定對象：refresh_summary <IG_ID>"
+            if len(parts) > 1:
+                target = parts[1]
+            else:
+                active = get_active_contact(db_path=self.db_path)
+                target = active["ig_account_id"] if active else None
+            if not target:
+                return "請指定對象：refresh_summary <IG_ID>，或先使用 select 切換對象。\n（輸入 help 可查看所有指令）"
+            return f"REFRESH_SUMMARY_REQUEST:{target}"
+
+        elif command == "sync":
+            if len(parts) > 1:
+                target = parts[1]
+            else:
+                active = get_active_contact(db_path=self.db_path)
+                target = active["ig_account_id"] if active else None
+            if not target:
+                return "請指定要同步的對象：sync <IG_ID>，或先使用 select 切換對象。\n（輸入 help 可查看所有指令）"
+            return f"SYNC_REQUEST:{target}"
 
         elif command == "untrack":
             if len(parts) < 2:
-                return "請指定對象：untrack <IG_ID>"
+                return "格式錯誤！請指定對象：untrack <IG_ID>\n（輸入 help 可查看所有指令）"
             target = parts[1]
             conn = get_connection(self.db_path)
             with conn:
@@ -92,7 +124,7 @@ class CommandRouter:
     def _handle_chat_mode(self, user_text: str) -> str:
         contact, summary_card, rag_chunks, recent_context = self.memory_manager.get_full_context(user_text)
         if not contact:
-            return "目前尚未選擇討論對象！請先傳送指令：select <IG_ID> 切換對象。"
+            return "目前尚未選擇討論對象！請先傳送指令：select <IG_ID> 切換對象。\n（輸入 help 可查看所有可用指令）"
 
         contact_id = contact["id"]
         add_bot_conversation(role="user", content=user_text, contact_id=contact_id)

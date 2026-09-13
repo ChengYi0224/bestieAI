@@ -172,3 +172,62 @@ def add_bot_conversation(role: str, content: str, contact_id: Optional[int] = No
             VALUES (?, ?, ?)
         """, (contact_id, role, content))
     conn.close()
+
+
+def get_contact_by_id(contact_id: int, db_path: Optional[Path] = None) -> Optional[sqlite3.Row]:
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM contacts WHERE id = ?", (contact_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row
+
+
+def get_contact_by_username(ig_account_id: str, db_path: Optional[Path] = None) -> Optional[sqlite3.Row]:
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM contacts WHERE ig_account_id = ?", (ig_account_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row
+
+
+def get_latest_message_time(contact_id: int, db_path: Optional[Path] = None) -> Optional[str]:
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT sent_at FROM messages WHERE contact_id = ? ORDER BY sent_at DESC LIMIT 1", (contact_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row["sent_at"] if row else None
+
+
+def update_contact_summary(contact_id: int, new_summary: str, db_path: Optional[Path] = None) -> None:
+    conn = get_connection(db_path)
+    with conn:
+        conn.execute("""
+            UPDATE contacts
+            SET summary_card = ?,
+                summary_updated_at = ?,
+                new_messages_since_summary = 0
+            WHERE id = ?
+        """, (new_summary, datetime.utcnow().isoformat(), contact_id))
+    conn.close()
+
+
+def should_update_summary(contact: Dict[str, Any], threshold: int = 50, days_limit: int = 14) -> bool:
+    new_msgs = contact.get("new_messages_since_summary") or 0
+    if new_msgs >= threshold:
+        return True
+
+    updated_at_str = contact.get("summary_updated_at")
+    if not updated_at_str:
+        return False
+
+    try:
+        updated_at = datetime.fromisoformat(updated_at_str)
+        if (datetime.utcnow() - updated_at).days >= days_limit and new_msgs > 0:
+            return True
+    except Exception:
+        pass
+
+    return False

@@ -1,7 +1,17 @@
 import time
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
-from app.db import get_or_create_contact, save_messages, get_connection
+from app.db import (
+    get_or_create_contact,
+    save_messages,
+    get_connection,
+    get_contact_by_id,
+    get_contact_by_username,
+    get_latest_message_time,
+    update_contact_summary,
+    should_update_summary,
+    get_recent_messages
+)
 from app.vectors import VectorStore
 from app.llm import LLMClient
 from app.ig import IGClient
@@ -61,7 +71,109 @@ class IngestionPipeline:
             "message_count": len(msgs)
         }
 
-    def run_ingestion(self, ig_client: IGClient, target_username: str, days_back: int = 30) -> Dict[str, Any]:
+    def check_and_update_summary(
+        self,
+        contact_id: int,
+        force: bool = False,
+        threshold: int = 50,
+        days_limit: int = 14,
+        db_path: Optional[Any] = None
+    ) -> Optional[str]:
+        contact_row = get_contact_by_id(contact_id, db_path=db_path)
+        if not contact_row:
+            return None
+
+        contact = dict(contact_row)
+        if not force and not should_update_summary(contact, threshold=threshold, days_limit=days_limit):
+            return None
+
+        recent_msgs = get_recent_messages(contact_id=contact_id, limit=50, db_path=db_path)
+        if not recent_msgs:
+            return None
+
+        formatted_lines = []
+        for m in recent_msgs:
+            sender_label = "我" if m["sender"] == "me" else "對方"
+            formatted_lines.append(f"[{m['sent_at']}] {sender_label}: {m['content']}")
+        conv_text = "\n".join(formatted_lines)
+
+        old_summary = contact.get("summary_card")
+        display_name = contact.get("display_name") or contact.get("ig_account_id") or "對方"
+
+        if old_summary:
+            new_summary = self.llm_client.update_summary(
+                display_name=display_name,
+                old_summary=old_summary,
+                new_conversations_text=conv_text
+            )
+        else:
+            new_summary = self.llm_client.generate_summary(conv_text)
+
+        update_contact_summary(contact_id, new_summary, db_path=db_path)
+        return new_summary
+
+    def sync_messages(
+        self,
+        ig_client: IGClient,
+        target_username: str,
+        db_path: Optional[Any] = None
+    ) -> Dict[str, Any]:
+        contact_row = get_contact_by_username(target_username, db_path=db_path)
+        if not contact_row:
+            raise ValueError(f"尚未追蹤 {target_username}，請先使用 track 指令初次匯入。")
+
+        contact_id = contact_row["id"]
+        latest_time_str = get_latest_message_time(contact_id, db_path=db_path)
+
+        thread = ig_client.get_thread_by_username(target_username)
+        if not thread:
+            raise ValueError(f"找不到與 {target_username} 的私訊對話串")
+
+        raw_messages = ig_client.get_thread_messages(thread_id=str(thread.id), amount=100)
+        me_pk = str(ig_client.client.user_id)
+
+        processed_msgs = []
+        for m in raw_messages:
+            sent_dt = m.timestamp
+            if latest_time_str:
+                try:
+                    latest_dt = datetime.fromisoformat(latest_time_str)
+                    if sent_dt <= latest_dt:
+                        continue
+                except Exception:
+                    pass
+
+            sender = "me" if str(m.user_id) == me_pk else "them"
+            processed_msgs.append({
+                "ig_item_id": str(m.id),
+                "sender": sender,
+                "content": self.clean_text(m.text),
+                "sent_at": sent_dt.isoformat()
+            })
+
+        inserted_count = save_messages(contact_id=contact_id, messages=processed_msgs, db_path=db_path)
+
+        chunks = self.chunk_messages(processed_msgs)
+        if chunks:
+            self.vector_store.add_chunks(contact_id=contact_id, chunks=chunks)
+
+        updated_summary = self.check_and_update_summary(contact_id=contact_id, db_path=db_path)
+
+        return {
+            "contact_id": contact_id,
+            "target_username": target_username,
+            "new_messages_count": inserted_count,
+            "chunks_added": len(chunks),
+            "summary_updated": updated_summary is not None
+        }
+
+    def run_ingestion(
+        self,
+        ig_client: IGClient,
+        target_username: str,
+        days_back: int = 30,
+        db_path: Optional[Any] = None
+    ) -> Dict[str, Any]:
         thread = ig_client.get_thread_by_username(target_username)
         if not thread:
             raise ValueError(f"找不到與 {target_username} 的私訊對話串")
@@ -88,8 +200,8 @@ class IngestionPipeline:
                 "sent_at": sent_dt.isoformat()
             })
 
-        contact_id = get_or_create_contact(ig_account_id=target_username, display_name=target_username)
-        inserted_count = save_messages(contact_id=contact_id, messages=processed_msgs)
+        contact_id = get_or_create_contact(ig_account_id=target_username, display_name=target_username, db_path=db_path)
+        inserted_count = save_messages(contact_id=contact_id, messages=processed_msgs, db_path=db_path)
 
         chunks = self.chunk_messages(processed_msgs)
         if chunks:
@@ -98,14 +210,7 @@ class IngestionPipeline:
         all_text = "\n".join([f"{'我' if m['sender']=='me' else '對方'}: {m['content']}" for m in processed_msgs])
         summary_card = self.llm_client.generate_summary(all_text[:4000])
 
-        conn = get_connection()
-        with conn:
-            conn.execute("""
-                UPDATE contacts
-                SET summary_card = ?, summary_updated_at = ?, new_messages_since_summary = 0
-                WHERE id = ?
-            """, (summary_card, datetime.utcnow().isoformat(), contact_id))
-        conn.close()
+        update_contact_summary(contact_id, summary_card, db_path=db_path)
 
         return {
             "contact_id": contact_id,
@@ -115,3 +220,4 @@ class IngestionPipeline:
             "chunk_count": len(chunks),
             "summary_card": summary_card
         }
+
