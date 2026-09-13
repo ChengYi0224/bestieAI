@@ -7,7 +7,7 @@
 - **套件管理**：使用 `uv` 進行虛擬環境與相依性管理。
 - **資料庫**：SQLite 儲存對話、聯絡人與討論紀錄；ChromaDB 本地儲存向量 chunks。
 - **免費 Embedding**：整合 Google Gemini `text-embedding-004` API。
-- **LLM 陪聊**：Anthropic Claude API（好友/閨蜜犀利溫暖語氣）。
+- **LLM 陪聊**：Google Gemini API（預設 `gemini-2.5-flash`，好友/閨蜜犀利溫暖語氣）。
 - **Session 加密**：`cryptography.fernet` 對稱加密保護 IG Session 憑證。
 
 ## 快速開始
@@ -30,8 +30,7 @@ cp .env.example .env
 - `MAIN_ACCOUNT_USERNAME` & `MAIN_ACCOUNT_PASSWORD`：使用者本人 IG 帳密（讀取訊息用）
 - `BOT_ACCOUNT_USERNAME` & `BOT_ACCOUNT_PASSWORD`：陪聊機器人 IG 帳密（接收指令與陪聊）
 - `SESSION_ENCRYPTION_KEY`：Fernet 金鑰（可由 `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` 產生）
-- `ANTHROPIC_API_KEY`：Claude API Key
-- `GEMINI_API_KEY`：Google Gemini API Key（免費 Embedding 用）
+- `GEMINI_API_KEY`：Google Gemini API Key（支援 Embedding 與對話生成）
 
 ### 3. 執行測試
 

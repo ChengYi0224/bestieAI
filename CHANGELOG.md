@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `app/vectors.py`：ChromaDB 向量庫封裝與 Gemini `text-embedding-004` 免費 Embedding。
 - `app/sessions.py`：雙帳號登入、2FA 與 Fernet 加密 Session 持久化。
 - `app/ig.py`：`instagrapi` 操作封裝與延遲保護。
-- `app/llm.py`：Claude API 與提示詞組裝。
+- `app/llm.py`：Google Gemini API（`gemini-2.5-flash`）提示詞與回覆/摘要生成。
 - `app/prompts/system.txt`：閨蜜/好友語氣 System Prompt 模板。
 - `app/memory.py`：三層記憶整合（近期原始、向量 RAG、長期摘要卡）。
 - `app/ingestion.py`：訊息清洗、以天/數量分段、Embedding 與關係摘要卡生成。

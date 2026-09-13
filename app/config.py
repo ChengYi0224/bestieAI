@@ -11,7 +11,6 @@ class Settings(BaseSettings):
     BOT_ACCOUNT_USERNAME: str = ""
     BOT_ACCOUNT_PASSWORD: str = ""
     SESSION_ENCRYPTION_KEY: str = ""
-    ANTHROPIC_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
 
     DB_PATH: Path = Field(default=Path("./data/app.db"))
