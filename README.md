@@ -7,7 +7,7 @@
 - **套件管理**：使用 `uv` 進行虛擬環境與相依性管理。
 - **資料庫**：SQLite 儲存對話、聯絡人與討論紀錄；ChromaDB 本地儲存向量 chunks。
 - **免費 Embedding**：整合 Google Gemini `text-embedding-004` API。
-- **LLM 陪聊**：Google Gemini API（預設 `gemini-2.5-flash`，好友/閨蜜犀利溫暖語氣）。
+- **LLM 陪聊**：Google Gemini API（預設 `gemini-3.8-flash`，好友/閨蜜犀利溫暖語氣）。
 - **Session 加密**：`cryptography.fernet` 對稱加密保護 IG Session 憑證。
 
 ## 快速開始

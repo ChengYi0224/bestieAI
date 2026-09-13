@@ -26,7 +26,7 @@ class LLMClient:
         rag_chunks: str,
         recent_context: str,
         user_query: str,
-        model: str = "gemini-2.5-flash"
+        model: str = "gemini-3.8-flash"
     ) -> str:
         template = PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
         prompt = template.format(
@@ -43,7 +43,7 @@ class LLMClient:
         )
         return response.text
 
-    def generate_summary(self, conversations_text: str, model: str = "gemini-2.5-flash") -> str:
+    def generate_summary(self, conversations_text: str, model: str = "gemini-3.8-flash") -> str:
         prompt = (
             "你是一位細心且深刻洞察人際關係的分析助理。請分析以下這段對話歷史，"
             "萃取並整理出一份精簡的「人物關係摘要卡」：\n\n"
