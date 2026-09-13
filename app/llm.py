@@ -1,0 +1,63 @@
+from pathlib import Path
+from typing import Optional
+import anthropic
+from app.config import settings
+
+PROMPT_TEMPLATE_PATH = Path(__file__).parent / "prompts" / "system.txt"
+
+
+class LLMClient:
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key or settings.ANTHROPIC_API_KEY
+        self._client = None
+
+    @property
+    def client(self) -> anthropic.Anthropic:
+        if self._client is None:
+            if not self.api_key:
+                raise ValueError("ANTHROPIC_API_KEY is not set in environment or .env")
+            self._client = anthropic.Anthropic(api_key=self.api_key)
+        return self._client
+
+    def generate_reply(
+        self,
+        display_name: str,
+        summary_card: str,
+        rag_chunks: str,
+        recent_context: str,
+        user_query: str,
+        model: str = "claude-3-5-sonnet-20241022"
+    ) -> str:
+        template = PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
+        prompt = template.format(
+            display_name=display_name or "對方",
+            summary_card=summary_card or "尚無摘要卡紀錄",
+            rag_chunks=rag_chunks or "無特定相關紀錄",
+            recent_context=recent_context or "無近期訊息",
+            user_query=user_query
+        )
+
+        response = self.client.messages.create(
+            model=model,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.content[0].text
+
+    def generate_summary(self, conversations_text: str, model: str = "claude-3-5-sonnet-20241022") -> str:
+        prompt = (
+            "你是一位細心且深刻洞察人際關係的分析助理。請分析以下這段對話歷史，"
+            "萃取並整理出一份精簡的「人物關係摘要卡」：\n\n"
+            "包含：\n"
+            "1. 人物個性與特質\n"
+            "2. 兩人的主要互動模式與聊天頻率風格\n"
+            "3. 提及的重要事件、回憶或關鍵話題\n"
+            "4. 目前關係的可能狀態或潛在張力\n\n"
+            f"對話歷史：\n{conversations_text}"
+        )
+        response = self.client.messages.create(
+            model=model,
+            max_tokens=1000,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.content[0].text
