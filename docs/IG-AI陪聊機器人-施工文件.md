@@ -1,7 +1,7 @@
 # IG AI 陪聊機器人 — 施工文件
 
-版本：v0.2 草案
-最後更新：2026-09-14
+版本：v0.3 架構重構與 RAG 效率革命
+最後更新：2026-09-15
 
 ---
 
@@ -293,28 +293,29 @@ track [IG ID]
 
 ---
 
-## 8. 分層記憶架構與摘要排程
+## 8. 分層記憶架構與事件 RAG（v0.3 革命）
 
-採用「近期原始層 → 中期 RAG 層 → 長期摘要層」三層記憶，越久遠的資料壓縮程度越高，兼顧回答品質與 API 成本。
+採用「近期原始層 → 事件條目 RAG 層 → 雙軌摘要層」三層記憶，徹底解決破碎字句雜訊與 Token 暴增問題：
 
-| 層級                  | 內容                                                       | 更新時機                                                                |
-| --------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------- |
-| **近期原始層**  | 最近 20–30 則原始訊息，逐字保留，存於`messages` 表      | 每次同步/track 有新訊息時即時更新                                       |
-| **中期 RAG 層** | 依天/依段落切的 chunk + embedding，存於 Chroma，可語意搜尋 | `track` 初次 ingestion 建立；之後每次同步只對「新增部分」做 ingestion |
-| **長期摘要卡**  | 高度壓縮的人物摘要：個性、相處模式、重大事件、目前關係狀態 | 見 8.1                                                                  |
+| 層級                      | 內容                                                                 | 儲存與格式                                                        |
+| ------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| **近期原始層**            | 最近 20–30 則原始訊息，逐字保留                                      | SQLite `messages` 表                                              |
+| **事件記憶 RAG 層**       | **[v0.3]** 由 LLM 從對話批次提煉的客觀事實條目（含日期）             | ChromaDB `chat_events` 集合（768 維度，支援共享 Query Embedding） |
+| **日常輕量卡**            | **[v0.3]** 限制 300–500 字之核心人物與相處狀態（注入日常聊天 Prompt） | SQLite `contacts.summary_card`                                    |
+| **全景深度長文**          | **[v0.3]** 7 大章節、數千字全景關係復盤長文（`card full` 查看，不注入聊天） | SQLite `contacts.full_history_summary`                            |
 
-### 8.1 摘要卡更新時機
+### 8.1 事件記憶 RAG（Event-based Memory RAG）
+- **揚棄原始碎句**：傳統 RAG 將破碎口語（如「？？？」、「哈哈哈哈」）直接切塊 Embedding，資訊密度極低且檢索充滿雜訊。
+- **批次事件萃取**：每 30~50 則對話由 LLM（優先調用 Lite 模型池）透過 `extract_events.txt` 提煉為 2~4 則高密度時間事實（例如：`[2026-08-18] 兩人相約夜市吃德克士，分享音樂與室友生活`）。
+- **共享單次 Query Embedding**：在 `MemoryService` 檢索時，單次對話僅發送 1 次 Embedding API 請求，計算出 768 維向量後同時並行檢索 Contact Event、Self、以及暱稱跨對象庫，徹底消除重複延遲。
 
-1. **初次 track**：用整月訊息一次性生成初始摘要卡。
-2. **累積增量觸發**：該對象「新增訊息數」累積達到門檻（建議 50 則）時，自動觸發增量更新——把「舊摘要卡 + 這批新訊息」一起丟給 LLM，請它**更新**摘要卡而非重寫，保留連續性並控制成本。
-3. **時間觸發（保底機制）**：若「距離上次摘要更新超過 14 天」，即使新訊息量不多也強制更新一次，避免摘要卡過時。
-4. **手動觸發**：保留 `refresh_summary` 指令，隨時可手動要求重新生成。
-
-### 8.2 長期歷史資料管理
-
-- 超過 3 個月的舊 chunk，建議定期（例如每月跑一次維護 job）合併壓縮成「月摘要 chunk」，取代原本較細碎的 chunk，減少向量搜尋時的雜訊。
-- 原始訊息在 SQLite 中**永久完整保留、不刪除**，向量庫的壓縮只影響 RAG 搜尋層，不影響原始資料的可追溯性。
-- 向量庫的搜尋範圍務必用 `contact_id` 過濾，確保不同對象的記憶不會互相污染。
+### 8.2 雙軌摘要架構與更新機制
+1. **日常輕量卡（`summary_card`）**：嚴格壓制在 300~500 字，專供即時聊天的 System Prompt，確保回覆速度在 2~3 秒內。
+2. **全景復盤長文（`full_history_summary`）**：儲存 7 大面向深層分析，供使用者以 `card full` 隨時手動檢閱。
+3. **分流指令**：
+   - `card`：調閱日常輕量卡。
+   - `card full`：調閱全景長文。
+   - `summarize_history`：同時生成全景長文與 400 字日常輕量卡。
 
 ---
 
@@ -322,17 +323,19 @@ track [IG ID]
 
 ### 9.1 `contacts`
 
-| 欄位                       | 型別       | 說明                                         |
-| -------------------------- | ---------- | -------------------------------------------- |
-| id                         | INTEGER PK |                                              |
-| ig_account_id              | TEXT       | 對方的 IG 帳號 ID/username                   |
-| display_name               | TEXT       | 使用者對這個對象的稱呼                       |
-| relationship_note          | TEXT       | 使用者自訂備註                               |
-| status                     | TEXT       | `tracked` / `untracked`                  |
-| summary_card               | TEXT       | 關係摘要卡內容                               |
-| summary_updated_at         | DATETIME   | 摘要卡最後更新時間                           |
-| new_messages_since_summary | INTEGER    | 自上次摘要後累積的新訊息數，用於觸發增量更新 |
-| last_synced_at             | DATETIME   | 上次同步聊天紀錄的時間                       |
+| 欄位                       | 型別       | 說明                                              |
+| -------------------------- | ---------- | ------------------------------------------------- |
+| id                         | INTEGER PK | 主鍵                                              |
+| ig_account_id              | TEXT       | 對方的 IG 帳號 ID/username                        |
+| display_name               | TEXT       | 使用者對這個對象的稱呼                            |
+| relationship_note          | TEXT       | 使用者自訂備註                                    |
+| status                     | TEXT       | `tracked` / `untracked`                           |
+| summary_card               | TEXT       | 日常輕量關係摘要卡（300-500 字）                  |
+| summary_updated_at         | DATETIME   | 摘要卡最後更新時間                                |
+| full_history_summary       | TEXT       | **[v0.3]** 全景深度歷史復盤長文（7 大章節）       |
+| full_history_updated_at    | DATETIME   | **[v0.3]** 全景長文最後更新時間                   |
+| new_messages_since_summary | INTEGER    | 自上次摘要後累積的新訊息數，用於觸發增量更新      |
+| last_synced_at             | DATETIME   | 上次同步聊天紀錄的時間                            |
 
 ### 9.2 `messages`
 
@@ -393,38 +396,44 @@ track [IG ID]
 
 ---
 
-## 11. 專案資料夾結構
+## 11. 專案資料夾結構（v0.3 分層模組化架構）
 
 ```
-ig-ai-companion/
+bestieAI/
 ├── app/
-│   ├── session_manager.py
-│   ├── poller.py
-│   ├── command_router.py
-│   ├── ingestion.py
-│   ├── memory.py
-│   ├── llm.py
-│   ├── db.py
-│   ├── vector_store.py
-│   ├── ig_client.py
-│   ├── config.py
-│   └── prompts/
-│       └── system_prompt.txt
-├── data/
-│   ├── app.db                 # SQLite（.gitignore）
-│   ├── chroma/                # 向量資料庫檔案（.gitignore）
-│   └── sessions/
-│       ├── main_account.json  # 加密 session（.gitignore）
-│       └── bot_account.json   # 加密 session（.gitignore）
-├── tests/
-│   └── test_ingestion.py
-├── .env.example
-├── .gitignore
-├── requirements.txt
-├── README.md
-├── CHANGELOG.md
-└── docs/
-    └── IG-AI陪聊機器人-施工文件.md   # 本文件
+│   ├── core/                  # 核心基礎設施
+│   │   ├── config.py          # Pydantic Settings 配置、模型清單與常數
+│   │   ├── rate_limit.py      # IG/Gemini 限速、防風控延遲、指數退避裝飾器
+│   │   └── security.py        # 白名單鑑權裝飾器、Session 加密金鑰管理
+│   ├── storage/               # 儲存層（封裝底層持久化）
+│   │   ├── db.py              # SQLite 連線管理與結構遷移
+│   │   ├── repositories.py    # ContactRepository, MessageRepository, BotStateRepository
+│   │   └── vectors.py         # ChromaDB 向量檢索（Batch API + 768 維度 + 共享 Query 向量）
+│   ├── services/              # 業務領域服務層
+│   │   ├── ig_service.py      # 高階 IG 操作與雙帳號 Session 生命週期封裝
+│   │   ├── llm_service.py     # Gemini 多模型容錯陣列、日誌、結構化提煉
+│   │   ├── memory_service.py  # 分層記憶組裝（共享單次 Query Embedding 檢索）
+│   │   ├── ingestion_service.py # 歷史對話清洗、事件萃取（Event Extraction）與批次向量化
+│   │   └── session_service.py # Session 密鑰管理與持久化操作
+│   ├── bot/                   # 機器人交互層
+│   │   ├── router.py          # 宣告式指令路由（@command_handler）、分組 Help、card full
+│   │   └── poller.py          # MQTT 即時推播監聽與背景隊列 Worker
+│   └── prompts/               # 提示詞範本
+│       ├── system.txt         # 閨蜜陪伴核心人設 Prompt
+│       ├── summary.txt        # 日常輕量關係摘要卡範本（限制 300-500 字）
+│       ├── full_summary.txt   # 全景歷史深度復盤長文範本（7 大章節）
+│       ├── extract_self.txt   # 使用者自身事實萃取範本
+│       └── extract_events.txt # 批次對話提煉為客觀時間事件條目範本
+├── data/                      # 本地持久化資料（.gitignore）
+│   ├── app.db                 # SQLite 資料庫（原始對話、聯絡人、摘要）
+│   ├── chroma/                # ChromaDB 向量資料庫（事件記憶與自我記憶）
+│   └── sessions/              # 加密 session（main_account.json, bot_account.json）
+├── tests/                     # 單元與整合測試套件（51 項測試全數通過）
+├── tools/                     # 維護與偵錯輔助腳本（如 preview_pipeline.py）
+├── docs/                      # 架構與施工文件
+├── main.py                    # 系統進入點
+├── pyproject.toml             # uv 依賴設定檔
+└── .env                       # 本地環境變數（.gitignore）
 ```
 
 ---
@@ -475,22 +484,20 @@ __pycache__/
 
 ---
 
-## 14. 版本迭代規劃
+## 14. 版本迭代歷程與規劃
 
-| 版本   | 內容                                                                         |
-| ------ | ---------------------------------------------------------------------------- |
-| v0.1.0 | `session_manager` 完成雙帳號登入 + 2FA + session 持久化                    |
-| v0.2.0 | `poller` + `command_router` 完成，能收到訊息並辨識指令                   |
-| v0.3.0 | `track` 指令完成，含完整 RAG ingestion pipeline、初始摘要卡生成            |
-| v0.4.0 | `select` + `memory.py` 完成，一般聊天模式可組合三層記憶並呼叫 Claude API |
-| v0.5.0 | 增量同步 + 摘要卡自動更新觸發機制（累積門檻 + 時間保底）                     |
-| v0.6.0 | `bot_conversations` 記憶，AI 記得討論到哪                                  |
-| v0.7.0 | 長期歷史壓縮（月摘要 chunk）維護 job                                         |
-| v1.0.0 | 穩定使用一段時間、聊天體驗順暢後標記為第一個穩定版                           |
+| 版本   | 狀態   | 核心內容                                                                                                 |
+| ------ | ------ | -------------------------------------------------------------------------------------------------------- |
+| v0.1.0 | 已完成 | `session_service` 完成雙帳號登入 + 2FA + session 加密持久化                                             |
+| v0.2.0 | 已完成 | `poller` (MQTT) + `router` 完成即時推播、狀態機切換、宣告式指令分發                                      |
+| v0.3.0 | **當前** | **Clean Architecture 重構**（分層目錄化）、**RAG 效率革命**（事件記憶條目化 + 768 維度 + 共享 Query 向量）、**雙軌記憶分離**（300 字日常卡 vs 7 大章節長文）、**Lite 模型分流**（獨立 500 RPD 配額池） |
+| v0.4.0 | 規劃中 | **跨對話自我全景畫像（Cross-Chat Self Profiling）**：跨對話深度分析使用者個性、溝通習慣、情緒模式與 MBTI |
+| v0.5.0 | 規劃中 | 增量對話自動批次提煉（門檻 30~50 則打包）與自我畫像週期性更新機制                                         |
+| v1.0.0 | 未來   | 穩定運行、各項指標滿足後發布正式版                                                                       |
 
 **Git 慣例**：
 
-- Commit message 用 `feat: `、`fix: `、`docs: ` 前綴
+- Commit message 用 `feat: `、`fix: `、`docs: `、`refactor: ` 前綴
 - 每個版本完成後打 `git tag vX.Y.Z`
 - `CHANGELOG.md` 依 [Keep a Changelog](https://keepachangelog.com/) 格式記錄每版異動
 
@@ -511,6 +518,45 @@ __pycache__/
 ## 16. 待確認事項（Open Questions）
 
 - [ ] `poller` 的輪詢頻率設多少合適？（頻率越低越安全，但回覆延遲越高，需要抓一個平衡點）
-- [X] embedding model 要用哪一個？（已確認使用 Google Gemini `text-embedding-004` 免費 API）
-- [ ] 摘要卡的增量觸發門檻（50 則）是否合理，要不要依對象聊天頻率動態調整？
+- [X] embedding model 要用哪一個？（已確認使用 Google Gemini `gemini-embedding-2` 模型，固定 768 維度）
+- [ ] 摘要卡的增量觸發門檻（30~50 則）是否合理，要不要依對象聊天頻率動態調整？
 - [ ] 是否需要多對象同時 tracked，或先鎖定 1 個對象把整套流程跑順再擴充？
+
+---
+
+## 17. v0.3 架構重構決策與後續藍圖
+
+### 17.1 當前架構核心決策（Current Architectural Decisions）
+1. **分層整潔架構（Clean Architecture）**：
+   - 徹底杜絕平鋪檔案，重構分層為 `core/`、`storage/`、`services/`、`bot/`、`prompts/`。
+   - 資料存取層使用 Repository Pattern（`ContactRepository`, `MessageRepository`, `BotStateRepository`）隔離底層 SQLite 細節。
+2. **事件記憶 RAG（Event-based Memory RAG）**：
+   - 徹底廢棄「破碎口語切塊直接向量化」，改由 LLM 批次提煉為高密度、帶時間戳的事件條目（`extract_events.txt`）。
+   - 檢索命中精準度大幅躍升，消除上千 Token 的無效贅詞雜訊。
+3. **共享單次 Query Embedding 檢索**：
+   - 使用者發言只發送 1 次 Embedding API 請求（768 維度），並行供應 Contact Event、Self、Nickname 記憶查詢，消除重複網路延遲（單次加速 1~2 秒）。
+4. **雙軌記憶分離（避免 Token 暴增）**：
+   - `summary_card` 強制限制在 300~500 字，專門注入日常聊天 Prompt。
+   - `full_history_summary` 儲存 7 大章節全景長文，透過指令 `card full` / `card -f` 手動查閱，不污染日常 Context。
+5. **模型分流與配額池隔離**：
+   - 即時聊天（`generate_reply`）：走 Gemini Flash 主系列。
+   - 背景提煉與摘要（`extract_events`, `summarize_history`）：配置專屬清單 `GEMINI_EVENT_EXTRACTION_MODELS`（優先使用 `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`），獨享 500 RPD 免費配額池，避免排擠主模型。
+6. **資料純淨性保障**：
+   - SQLite `messages.content` 100% 儲存純原始文字與時間戳記，不夾帶額外推論標籤，作為可靠的單一事實來源（Single Source of Truth）。
+
+### 17.2 後續規劃決策（Future Roadmap）
+1. **跨對話自我畫像與 MBTI 分析系統（Cross-Chat Self Profiling）**：
+   - **核心動機**：讓 AI 不僅了解聯絡人，更能真正透徹理解「使用者本人」。
+   - **資料來源**：直接從本地 SQLite 跨所有聯絡人撈取 `sender == 'me'` 的發言，完全無需重複向 IG 爬蟲。
+   - **分析面向**：
+     - 溝通節奏與社交風格（回訊速度、主動性、口癖）。
+     - 情緒模式與壓力應對方式。
+     - 核心價值觀與人際邊界。
+     - MBTI 人格類型推論與深入剖析。
+   - **雙層注入機制**：
+     - 完整自我畫像保存在資料庫，可用 `profile` / `me profile` 指令全景檢閱。
+     - 日常對話壓縮提煉成 150~200 字核心特質注入 System Prompt，維持極致 Token 效率與精準同理心。
+2. **對話累積打包提煉機制（Batch Ingestion）**：
+   - 日常聊天嚴禁每句觸發提煉，避免浪費 API 配額。
+   - 採非同步批次機制：當新對話累積達到門檻（30~50 則）或使用者手動輸入指令時，才打包交由 Lite 模型提取事件條目。
+
