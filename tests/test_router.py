@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock
-from app.db import init_db, get_or_create_contact
-from app.router import CommandRouter
+from app.storage.db import init_db, get_or_create_contact
+from app.bot.router import CommandRouter
 
 @pytest.fixture
 def router(tmp_path):
@@ -84,7 +84,7 @@ def test_select_fuzzy_matching(tmp_path):
 
 def test_status_and_query_worker_progress(tmp_path):
     import time
-    from app.db import init_db, set_worker_status
+    from app.storage.db import init_db, set_worker_status
 
     db_file = tmp_path / "test_worker.db"
     init_db(db_file)
@@ -118,8 +118,8 @@ def test_status_and_query_worker_progress(tmp_path):
 
 def test_chat_history_in_reply(tmp_path):
     from unittest.mock import MagicMock, call
-    from app.db import init_db, get_or_create_contact, add_bot_conversation, set_active_contact
-    from app.router import CommandRouter
+    from app.storage.db import init_db, get_or_create_contact, add_bot_conversation, set_active_contact
+    from app.bot.router import CommandRouter
 
     db_file = tmp_path / "chat_history_test.db"
     init_db(db_file)
@@ -154,8 +154,8 @@ def test_chat_history_in_reply(tmp_path):
 
 
 def test_card_command(tmp_path):
-    from app.db import init_db, get_or_create_contact, set_active_contact, update_contact_summary, set_contact_nickname
-    from app.router import CommandRouter
+    from app.storage.db import init_db, get_or_create_contact, set_active_contact, update_contact_summary, set_contact_nickname
+    from app.bot.router import CommandRouter
 
     db_file = tmp_path / "card_test.db"
     init_db(db_file)

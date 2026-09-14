@@ -1,7 +1,7 @@
 import time
 import pytest
 from unittest.mock import patch, MagicMock
-from app.rate_limit import ig_retry, gemini_retry, wait_with_log, _is_gemini_retryable_error
+from app.core.rate_limit import ig_retry, gemini_retry, wait_with_log, _is_gemini_retryable_error
 from instagrapi.exceptions import ClientThrottledError, PleaseWaitFewMinutes
 from google.genai.errors import ClientError, ServerError
 
@@ -27,8 +27,8 @@ def test_ig_retry_retries_on_throttle(monkeypatch):
     calls = []
 
     # 不實際等待 30 分鐘
-    monkeypatch.setattr("app.rate_limit.LONG_WAIT_SECONDS", 0)
-    monkeypatch.setattr("app.rate_limit.wait_with_log", lambda s, reason="": None)
+    monkeypatch.setattr("app.core.rate_limit.LONG_WAIT_SECONDS", 0)
+    monkeypatch.setattr("app.core.rate_limit.wait_with_log", lambda s, reason="": None)
 
     @ig_retry(max_retries=1)
     def flaky_fn():
@@ -44,7 +44,7 @@ def test_ig_retry_retries_on_throttle(monkeypatch):
 
 def test_ig_retry_raises_after_max_retries(monkeypatch):
     """超過 max_retries 仍失敗時應拋出例外。"""
-    monkeypatch.setattr("app.rate_limit.wait_with_log", lambda s, reason="": None)
+    monkeypatch.setattr("app.core.rate_limit.wait_with_log", lambda s, reason="": None)
 
     @ig_retry(max_retries=1)
     def always_fail():
@@ -126,7 +126,7 @@ def test_is_gemini_retryable_error_ignores_client_errors():
 
 def test_calculate_human_delay_high_variance():
     import statistics
-    from app.rate_limit import calculate_human_delay
+    from app.core.rate_limit import calculate_human_delay
 
     samples = [calculate_human_delay(min_delay=3.5, max_delay=14.0, pause_chance=0.2, pause_min=20.0, pause_max=40.0) for _ in range(100)]
     stdev = statistics.stdev(samples)

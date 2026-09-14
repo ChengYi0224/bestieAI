@@ -1,6 +1,6 @@
 import pytest
 from pathlib import Path
-from app.db import (
+from app.storage.db import (
     init_db,
     get_connection,
     get_or_create_contact,
@@ -53,7 +53,7 @@ def test_save_and_get_messages(temp_db):
     assert recent[1]["content"] == "哈囉！"
 
 def test_should_update_summary():
-    from app.db import should_update_summary
+    from app.storage.db import should_update_summary
     from datetime import datetime, timedelta
 
     # 1. 達 50 則門檻
@@ -67,7 +67,7 @@ def test_should_update_summary():
     assert should_update_summary({"new_messages_since_summary": 0, "summary_updated_at": old_time}) is False
 
 def test_update_contact_summary(temp_db):
-    from app.db import update_contact_summary, get_contact_by_id
+    from app.storage.db import update_contact_summary, get_contact_by_id
     cid = get_or_create_contact("alex_test", "Alex", db_path=temp_db)
     update_contact_summary(cid, "這是新的摘要卡內容", db_path=temp_db)
     contact = get_contact_by_id(cid, db_path=temp_db)

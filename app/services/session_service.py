@@ -1,28 +1,22 @@
+"""
+session_service.py — Instagram Client Session 加解密與登入狀態管理。
+"""
 import json
 from pathlib import Path
 from typing import Optional
-from cryptography.fernet import Fernet
 from instagrapi import Client
 from instagrapi.exceptions import LoginRequired, TwoFactorRequired, ChallengeRequired
-from app.config import settings
+
+from app.core.config import settings
+from app.core.security import SessionCipher
 
 
 class SessionManager:
     def __init__(self, session_dir: Optional[Path] = None, encryption_key: Optional[str] = None):
         self.session_dir = session_dir or settings.SESSION_DIR
         self.session_dir.mkdir(parents=True, exist_ok=True)
-        key = encryption_key or settings.SESSION_ENCRYPTION_KEY
-        if not key:
-            key_file = self.session_dir.parent / ".session_key"
-            if key_file.exists():
-                key = key_file.read_text(encoding="utf-8").strip()
-            else:
-                key = Fernet.generate_key().decode("utf-8")
-                try:
-                    key_file.write_text(key, encoding="utf-8")
-                except Exception:
-                    pass
-        self.cipher = Fernet(key.encode("utf-8"))
+        self.cipher_wrapper = SessionCipher(self.session_dir, encryption_key)
+        self.cipher = self.cipher_wrapper.cipher
 
     def _get_session_path(self, account_type: str) -> Path:
         return self.session_dir / f"{account_type}_account.json"

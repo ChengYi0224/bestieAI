@@ -1,12 +1,17 @@
+"""
+ig_service.py — Instagram 私訊通訊服務。
+
+封裝 instagrapi Client 的對話串查詢、分頁防風控訊息抓取與訊息發送。
+"""
 import time
 import random
 import logging
 from typing import List, Optional, Callable
 from instagrapi import Client
 from instagrapi.types import DirectThread, DirectMessage
-from app.rate_limit import ig_retry, paged_jitter
+from app.core.rate_limit import ig_retry, paged_jitter
 
-logger = logging.getLogger("bestieAI.ig")
+logger = logging.getLogger("bestieAI.ig_service")
 
 
 class IGClient:
@@ -43,7 +48,6 @@ class IGClient:
             logger.warning(f"無法透過 username 取得 user_id ({username}): {e}")
 
         # 2. 第一優先：利用 IG 官方 direct_thread_by_participants API 直接獲取兩人的唯一對話串
-        # （即使對話在數月前、沉在收件匣底層或已被退追，只要未被徹底刪除即可精確定位）
         if user_id:
             try:
                 paged_jitter(min_delay=1.0, max_delay=2.5)
@@ -60,7 +64,7 @@ class IGClient:
             except Exception as e:
                 logger.info(f"direct_thread_by_participants 查詢未果 ({e})，降級進行收件匣深層搜尋...")
 
-        # 3. 備援方案：收件匣深層分頁掃描（檢查前 100 筆對話串，涵蓋 users 與 inviter）
+        # 3. 備援方案：收件匣深層分頁掃描
         cursor = None
         for page_idx in range(5):  # 最多翻 5 頁（約 100 筆對話串）
             paged_jitter(min_delay=1.0, max_delay=2.5)
@@ -76,7 +80,6 @@ class IGClient:
                     all_participants.append(thread.inviter)
 
                 for u in all_participants:
-                    # 比對 user_id 或 username (不分大小寫)
                     if (user_id and str(u.pk) == str(user_id)) or (u.username and u.username.lower() == username.lower()):
                         logger.info(f"在收件匣第 {page_idx + 1} 頁找到與 {username} 的對話串！")
                         return thread
@@ -116,13 +119,11 @@ class IGClient:
                 params["cursor"] = cursor
 
             if page > 0:
-                # 批次冷卻：打破固定每 N 頁的規律，加入 4~7 頁的動態隨機週期與 35~80 秒高變異深度休眠
                 target_rest_interval = getattr(self, "_current_batch_rest_interval", batch_rest_pages)
                 if batch_rest_pages > 0 and page % target_rest_interval == 0:
                     rest_time = random.uniform(batch_rest_seconds * 0.8, batch_rest_seconds * 2.2)
                     logger.info(f"已爬取 {page} 頁（{len(items)} 則），啟動風控防禦深層休眠 {rest_time:.1f} 秒...")
                     time.sleep(rest_time)
-                    # 重新隨機決定下一次的觸發間隔（例如 4 到 7 頁之間）
                     self._current_batch_rest_interval = random.randint(max(3, batch_rest_pages - 1), batch_rest_pages + 2)
                 else:
                     paged_jitter(min_delay=min_delay, max_delay=max_delay)
@@ -157,7 +158,6 @@ class IGClient:
         if amount:
             items = items[:amount]
 
-        # 將原始 dict 轉回 DirectMessage
         from instagrapi.extractors import extract_direct_message
         return [extract_direct_message(i) for i in items]
 

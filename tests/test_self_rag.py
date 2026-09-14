@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 from pathlib import Path
-from app.db import (
+from app.storage.db import (
     init_db,
     get_or_create_contact,
     set_contact_nickname,
@@ -9,10 +9,10 @@ from app.db import (
     set_active_contact,
     get_contact_by_id,
 )
-from app.vectors import VectorStore
-from app.memory import MemoryManager
-from app.llm import LLMClient
-from app.router import CommandRouter
+from app.storage.vectors import VectorStore
+from app.services.memory_service import MemoryManager
+from app.services.llm_service import LLMClient
+from app.bot.router import CommandRouter
 
 
 def test_nickname_db_crud(tmp_path):

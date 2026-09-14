@@ -1,5 +1,5 @@
 from unittest.mock import MagicMock
-from app.ingestion import IngestionPipeline
+from app.services.ingestion_service import IngestionPipeline
 
 def test_clean_text():
     assert IngestionPipeline.clean_text(None) == "[圖片/貼圖/非文字訊息]"
@@ -21,7 +21,7 @@ def test_chunk_messages():
 
 def test_check_and_update_summary(tmp_path):
     from unittest.mock import MagicMock
-    from app.db import init_db, get_or_create_contact, save_messages, get_contact_by_id, get_all_messages
+    from app.storage.db import init_db, get_or_create_contact, save_messages, get_contact_by_id, get_all_messages
 
     db_file = tmp_path / "test.db"
     init_db(db_file)
@@ -56,7 +56,7 @@ def test_check_and_update_summary(tmp_path):
 
 def test_rebuild_vectors(tmp_path):
     """驗證 rebuild_vectors 從 SQLite 重建 ChromaDB，不需碰 IG API。"""
-    from app.db import init_db, get_or_create_contact, save_messages
+    from app.storage.db import init_db, get_or_create_contact, save_messages
     import chromadb
 
     db_file = tmp_path / "test.db"
@@ -64,7 +64,7 @@ def test_rebuild_vectors(tmp_path):
 
     # 建立真實 ChromaDB
     chroma_path = tmp_path / "chroma"
-    vs_real = __import__("app.vectors", fromlist=["VectorStore"])
+    vs_real = __import__("app.storage.vectors", fromlist=["VectorStore"])
     chroma_client = chromadb.PersistentClient(path=str(chroma_path))
     collection = chroma_client.get_or_create_collection(
         name="chat_chunks",
@@ -96,7 +96,7 @@ def test_rebuild_vectors(tmp_path):
 def test_run_full_ingestion_deduplication(tmp_path):
     """驗證 run_full_ingestion 面對已存在訊息時自動去重、不重複儲存。"""
     from datetime import datetime
-    from app.db import init_db, get_or_create_contact, save_messages, get_all_messages
+    from app.storage.db import init_db, get_or_create_contact, save_messages, get_all_messages
 
     db_file = tmp_path / "test_full.db"
     init_db(db_file)
@@ -141,7 +141,7 @@ def test_run_full_ingestion_deduplication(tmp_path):
 
 def test_build_full_history_summary(tmp_path):
     """驗證 build_full_history_summary 完整讀取所有歷史對話並生成全景關係卡片。"""
-    from app.db import init_db, get_or_create_contact, save_messages, get_contact_by_id
+    from app.storage.db import init_db, get_or_create_contact, save_messages, get_contact_by_id
 
     db_file = tmp_path / "test_full_sum.db"
     init_db(db_file)

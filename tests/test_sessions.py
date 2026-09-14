@@ -2,7 +2,7 @@ import pytest
 from pathlib import Path
 from cryptography.fernet import Fernet
 from unittest.mock import MagicMock
-from app.sessions import SessionManager
+from app.services.session_service import SessionManager
 
 def test_session_encrypt_decrypt(tmp_path):
     key = Fernet.generate_key().decode("utf-8")
@@ -23,7 +23,7 @@ def test_session_encrypt_decrypt(tmp_path):
 
 
 def test_session_key_persistence_file(tmp_path, monkeypatch):
-    from app.config import settings
+    from app.core.config import settings
     monkeypatch.setattr(settings, "SESSION_ENCRYPTION_KEY", "")
 
     session_dir = tmp_path / "sessions"

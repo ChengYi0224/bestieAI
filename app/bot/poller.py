@@ -1,46 +1,30 @@
+"""
+poller.py — MQTT 即時推播監聽與背景任務 Worker。
+
+功能：
+- 白名單授權防護 (@require_whitelist)
+- MQTT 雙向長連接監聽，被動即時喚醒
+- 背景單一執行緒隊列 Worker，任務間 60~120s 安全冷卻
+"""
 import time
 import socket
 import logging
 import queue
 import threading
-import functools
 from datetime import datetime
 from typing import Set, Optional, Dict, Any, List
 from instagrapi import Client
 from instagrapi.exceptions import LoginRequired
-from app.config import settings
-from app.sessions import SessionManager
-from app.ig import IGClient
-from app.router import CommandRouter
-from app.ingestion import IngestionPipeline
-from app.db import set_worker_status, get_worker_status, set_active_contact
 
-logger = logging.getLogger("bestieAI.poller")
+from app.core.config import settings
+from app.core.security import require_whitelist
+from app.services.session_service import SessionManager
+from app.services.ig_service import IGClient
+from app.bot.router import CommandRouter
+from app.services.ingestion_service import IngestionPipeline
+from app.storage.db import set_worker_status, get_worker_status, set_active_contact
 
-
-def require_whitelist(func):
-    """
-    Decorator：權限攔截裝飾器。
-    僅允許主帳號（本人）發送的私訊進入訊息分發流程，其餘帳號一律靜默丟棄。
-    """
-    @functools.wraps(func)
-    def wrapper(self, thread_id: str, user_id: str, item_id: str, text: str, *args, **kwargs):
-        # 若發送者是小帳（Bot 本人），直接忽略
-        bot_pk = str(getattr(self.bot_client, "user_id", ""))
-        if user_id and user_id == bot_pk:
-            return
-
-        # 若白名單 PK 尚未設定，嘗試動態解析一次
-        if not self.allowed_main_pk:
-            self._resolve_main_pk()
-
-        # 白名單校驗：若確認不是主帳號，靜默攔截
-        if self.allowed_main_pk and str(user_id) != str(self.allowed_main_pk):
-            logger.warning(f"[Security] 攔截到非主帳號 ({user_id}) 之私訊，已靜默忽略。")
-            return
-
-        return func(self, thread_id, user_id, item_id, text, *args, **kwargs)
-    return wrapper
+logger = logging.getLogger("bestieAI.bot_poller")
 
 
 class BotPoller:
@@ -60,7 +44,6 @@ class BotPoller:
         self.main_ig: Optional[IGClient] = None
         self.allowed_main_pk: Optional[str] = settings.MAIN_ACCOUNT_USER_ID or None
 
-        # 背景爬蟲任務隊列與線程鎖
         self._task_queue: queue.Queue = queue.Queue()
         self._current_task: Optional[Dict[str, Any]] = None
         self._worker_thread: Optional[threading.Thread] = None
@@ -84,7 +67,6 @@ class BotPoller:
             return
         logger.info("建立 MQTT Realtime 長連接...")
         rt = self.bot_client.realtime_connect()
-        # 設定較短的 socket 逾時（2 秒），讓 Windows 底層 blocking socket 能夠及時讓出 GIL 捕捉 SIGINT (Ctrl+C)
         if hasattr(rt, "transport") and rt.transport:
             rt.transport.timeout = 2.0
             if hasattr(rt.transport, "sock") and rt.transport.sock:
@@ -123,14 +105,12 @@ class BotPoller:
     # ==================== 背景任務隊列 Worker ====================
 
     def _start_queue_worker(self) -> None:
-        """啟動單一背景 Worker 執行緒，確保所有全量爬取循序排隊執行，絕不併發。"""
         if self._worker_thread is None or not self._worker_thread.is_alive():
             self._worker_thread = threading.Thread(target=self._task_worker_loop, daemon=True)
             self._worker_thread.start()
             logger.info("背景任務 Worker 執行緒已啟動。")
 
     def _task_worker_loop(self) -> None:
-        """Worker 主迴圈：從 Queue 取出任務、執行全量抓取，任務間強制安全冷卻 60~120 秒。"""
         import random
         while self.running:
             try:
@@ -194,7 +174,7 @@ class BotPoller:
                 reply_text = (
                     f"{target} 歷史紀錄匯入完成（耗時 {elapsed_min} 分鐘）\n"
                     f"下載: {info['downloaded_messages']} 則 / 新增: {info['new_inserted_messages']} 則 / 總量: {info['total_messages_in_db']} 則\n"
-                    f"重構 Chunks: {info['chunks_rebuilt']} / 關係摘要卡已更新"
+                    f"重構事件記憶: {info['chunks_rebuilt']} 條 / 關係摘要卡已更新"
                 )
             except Exception as ex:
                 logger.error(f"[Worker] 全量抓取 {target} 失敗: {ex}")
@@ -216,14 +196,12 @@ class BotPoller:
             self._current_task = None
             self._task_queue.task_done()
 
-            # 任務交接安全冷卻：若隊列中還有任務，強制休眠 60~120 秒，防 IG 連續大量翻頁風控
             if not self._task_queue.empty():
                 cooldown = random.uniform(60.0, 120.0)
                 logger.info(f"[Worker] 任務 {target} 完成，安全冷卻 {cooldown:.1f} 秒後執行下一任務...")
                 time.sleep(cooldown)
 
     def _get_queued_targets(self) -> List[str]:
-        """取得當前隊列中等待執行的對象清單。"""
         with self._task_queue.mutex:
             return [t["target"] for t in list(self._task_queue.queue)]
 
@@ -271,10 +249,8 @@ class BotPoller:
             max_amt = int(max_amt_str)
             amt_label = f"上限 {max_amt} 則" if max_amt > 0 else "無限制"
 
-            # 確保背景 Worker 執行緒已在運作
             self._start_queue_worker()
 
-            # 邊界案例 1：若目前正在抓取同一個對象
             if self._current_task and self._current_task.get("target") == target:
                 w_status = get_worker_status()
                 pages = w_status.get("pages", 0) if w_status else 0
@@ -285,7 +261,6 @@ class BotPoller:
                 )
                 return
 
-            # 邊界案例 2：若該對象已經在佇列中排隊
             queued = self._get_queued_targets()
             if target in queued:
                 pos = queued.index(target) + 1
@@ -295,7 +270,6 @@ class BotPoller:
                 )
                 return
 
-            # 邊界案例 3：若目前有其他任務正在跑，排入 Queue
             if self._current_task is not None:
                 self._task_queue.put({"target": target, "max_amount": max_amt, "thread_id": thread_id})
                 queued = self._get_queued_targets()
@@ -307,7 +281,6 @@ class BotPoller:
                 )
                 return
 
-            # 邊界案例 4：無任何任務進行中，直接放入 Queue 開始執行
             self._task_queue.put({"target": target, "max_amount": max_amt, "thread_id": thread_id})
             self.bot_ig.send_message(
                 thread_id,
@@ -320,7 +293,7 @@ class BotPoller:
             target = result.split(":", 1)[1]
             self.bot_ig.send_message(thread_id, f"正在重新分析並更新 {target} 的人物關係摘要卡...")
             try:
-                from app.db import get_contact_by_username
+                from app.storage.db import get_contact_by_username
                 contact = get_contact_by_username(target)
                 if not contact:
                     reply_text = f"找不到對象 {target}，請確認是否已 track。"
@@ -344,8 +317,9 @@ class BotPoller:
             try:
                 info = self.ingestion.build_full_history_summary(target)
                 reply_text = (
-                    f"【{target} 全景關係復盤卡】（共 {info['total_messages']} 則對話）\n\n"
-                    f"{info['summary_card']}"
+                    f"【{target} 全景關係復盤完成】（共 {info['total_messages']} 則對話）\n\n"
+                    f"💡 7 大章節長文已保存，日常對話卡片已同步更新！\n"
+                    f"可輸入「card full」查看完整長篇復盤內容。"
                 )
             except Exception as ex:
                 logger.error(f"全景歷史摘要失敗: {ex}")
@@ -361,7 +335,7 @@ class BotPoller:
                     self.main_ig = IGClient(main_client)
                 sync_info = self.ingestion.sync_messages(self.main_ig, target)
                 summary_msg = "（摘要卡已更新）" if sync_info["summary_updated"] else ""
-                reply_text = f"同步完成：新增 {sync_info['new_messages_count']} 則訊息，{sync_info['chunks_added']} 個 Chunks。{summary_msg}"
+                reply_text = f"同步完成：新增 {sync_info['new_messages_count']} 則訊息，提煉 {sync_info['chunks_added']} 條事件記憶。{summary_msg}"
             except Exception as ex:
                 logger.error(f"同步失敗: {ex}")
                 reply_text = f"同步 {target} 失敗: {ex}"
@@ -372,7 +346,7 @@ class BotPoller:
             self.bot_ig.send_message(thread_id, f"重建 {target} 向量庫中...")
             try:
                 info = self.ingestion.rebuild_vectors(target)
-                reply_text = f"向量庫重建完成：總量 {info['total_messages']} 則訊息，共 {info['chunks_rebuilt']} 個 Chunks。"
+                reply_text = f"向量庫重建完成：總量 {info['total_messages']} 則訊息，提煉 {info['chunks_rebuilt']} 條事件記憶。"
             except Exception as ex:
                 logger.error(f"重建向量庫失敗: {ex}")
                 reply_text = f"重建 {target} 向量庫失敗: {ex}"
@@ -383,7 +357,7 @@ class BotPoller:
 
     def _check_periodic_summaries(self) -> None:
         try:
-            from app.db import get_connection
+            from app.storage.db import get_connection
             conn = get_connection()
             cursor = conn.cursor()
             cursor.execute("SELECT id, ig_account_id FROM contacts WHERE status = 'tracked'")
@@ -423,7 +397,6 @@ class BotPoller:
             try:
                 self.bot_client.realtime_read_once()
             except (socket.timeout, TimeoutError):
-                # 正常逾時，檢查是否需要發送 MQTT 心跳 (每 30 秒 ping 一次)
                 now = time.time()
                 if now - last_ping_time >= 30:
                     try:

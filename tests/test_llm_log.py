@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock
-from app.llm import LLMClient, log_llm_call
+from app.services.llm_service import LLMClient, log_llm_call
 
 def test_log_llm_call_writes_structured_log(tmp_path):
     log_file = tmp_path / "test_llm.log"
@@ -69,7 +69,7 @@ def test_llm_client_logs_during_call(tmp_path):
 
 
 def test_llm_log_disabled(tmp_path, monkeypatch):
-    from app.config import settings
+    from app.core.config import settings
 
     log_file = tmp_path / "disabled_llm.log"
     monkeypatch.setattr(settings, "ENABLE_LLM_LOG", False)

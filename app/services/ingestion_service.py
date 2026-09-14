@@ -1,22 +1,34 @@
+"""
+ingestion_service.py — 對話匯入、事件提煉與雙軌記憶管道。
+
+革新：
+- 徹底廢除破碎口語切塊直接向量化，改由 LLM 提煉出客觀事件記憶條目（Event Memory Snippets）再存入 ChromaDB。
+- 記憶層級分離：全景長篇復盤儲存於 full_history_summary；日常對話僅使用 300~500 字精簡 summary_card。
+- 支援增量同步 (sync)、慢速全量抓取 (track_full) 與本地向量重建 (rebuild_vectors)。
+"""
 import time
+import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional, Callable
-from app.db import (
+
+from app.core.config import settings
+from app.storage.db import (
     get_or_create_contact,
     save_messages,
-    get_connection,
     get_contact_by_id,
     get_contact_by_username,
     get_latest_message_time,
     update_contact_summary,
+    update_contact_full_history,
     should_update_summary,
     get_recent_messages,
     get_all_messages,
 )
-from app.config import settings
-from app.vectors import VectorStore
-from app.llm import LLMClient
-from app.ig import IGClient
+from app.storage.vectors import VectorStore
+from app.services.llm_service import LLMClient
+from app.services.ig_service import IGClient
+
+logger = logging.getLogger("bestieAI.ingestion_service")
 
 
 class IngestionPipeline:
@@ -32,7 +44,16 @@ class IngestionPipeline:
         return cleaned if cleaned else "[圖片/貼圖/非文字訊息]"
 
     @staticmethod
+    def _parse_time(time_str: str) -> Optional[datetime]:
+        try:
+            clean_str = time_str.replace("Z", "+00:00")
+            return datetime.fromisoformat(clean_str)
+        except Exception:
+            return None
+
+    @staticmethod
     def chunk_messages(messages: List[Dict[str, Any]], max_chunk_size: Optional[int] = None) -> List[Dict[str, Any]]:
+        """保留傳統基於日期的切塊邏輯（相容既有單元測試與回退備案）。"""
         chunk_sz = max_chunk_size if max_chunk_size is not None else settings.CHUNK_MAX_SIZE
         if not messages:
             return []
@@ -58,14 +79,6 @@ class IngestionPipeline:
             chunks.append(IngestionPipeline._build_chunk_dict(len(chunks) + 1, current_chunk))
 
         return chunks
-
-    @staticmethod
-    def _parse_time(time_str: str) -> Optional[datetime]:
-        try:
-            clean_str = time_str.replace("Z", "+00:00")
-            return datetime.fromisoformat(clean_str)
-        except Exception:
-            return None
 
     @staticmethod
     def _build_chunk_dict(chunk_id: int, msgs: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -127,6 +140,44 @@ class IngestionPipeline:
             "message_count": len(msgs)
         }
 
+    def extract_event_chunks(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        核心革新：對話批次提煉為高密度事件記憶條目。
+        每批對話萃取出 1~4 條帶時間戳的事實條目，避免破碎無效對話污染向量資料庫。
+        """
+        if not messages:
+            return []
+
+        sorted_msgs = sorted(messages, key=lambda m: m["sent_at"])
+        batch_size = getattr(settings, "EVENT_EXTRACTION_BATCH_SIZE", 40)
+        event_chunks = []
+
+        for i in range(0, len(sorted_msgs), batch_size):
+            batch = sorted_msgs[i:i + batch_size]
+            formatted_lines = []
+            for m in batch:
+                sender_label = "我" if m["sender"] == "me" else "對方"
+                formatted_lines.append(f"[{m['sent_at']}] {sender_label}: {m['content']}")
+            conv_text = "\n".join(formatted_lines)
+
+            try:
+                events = self.llm_client.extract_events(conv_text)
+                for e_idx, ev in enumerate(events):
+                    event_chunks.append({
+                        "id": f"event_{i}_{e_idx}",
+                        "text": ev,
+                        "start_time": batch[0]["sent_at"],
+                        "end_time": batch[-1]["sent_at"],
+                        "message_count": len(batch),
+                        "type": "event_memory"
+                    })
+            except Exception as ex:
+                logger.warning(f"事件提煉失敗，降級為傳統 chunk 切塊: {ex}")
+                fallback = self._build_chunk_dict(len(event_chunks) + 1, batch)
+                event_chunks.append(fallback)
+
+        return event_chunks
+
     def check_and_update_summary(
         self,
         contact_id: int,
@@ -153,10 +204,9 @@ class IngestionPipeline:
             formatted_lines.append(f"[{m['sent_at']}] {sender_label}: {m['content']}")
         conv_text = "\n".join(formatted_lines)
 
-        old_summary = contact.get("summary_card")
         display_name = contact.get("display_name") or contact.get("ig_account_id") or "對方"
-
-        if old_summary:
+        old_summary = contact.get("summary_card")
+        if old_summary and hasattr(self.llm_client, "update_summary"):
             new_summary = self.llm_client.update_summary(
                 display_name=display_name,
                 old_summary=old_summary,
@@ -166,7 +216,7 @@ class IngestionPipeline:
             new_summary = self.llm_client.generate_summary(conv_text)
 
         update_contact_summary(contact_id, new_summary, db_path=db_path)
-        return new_summary
+        return str(new_summary)
 
     def build_full_history_summary(
         self,
@@ -174,8 +224,8 @@ class IngestionPipeline:
         db_path: Optional[Any] = None
     ) -> Dict[str, Any]:
         """
-        讀取本地 SQLite 資料庫中自始至終的「所有歷史訊息」，
-        利用 Gemini 百萬 Token 上下文視窗生成完整的全景關係復盤卡。
+        生成全景關係復盤長文（存入 full_history_summary），
+        同時自動提煉 300~500 字日常輕量卡（更新 summary_card）。
         """
         contact_row = get_contact_by_username(target_username, db_path=db_path)
         if not contact_row:
@@ -188,26 +238,26 @@ class IngestionPipeline:
         if not all_msgs:
             raise ValueError(f"{target_username} 在本地資料庫尚無任何訊息紀錄。")
 
-        # 格式化完整對話紀錄（含時間、發送者與內容）
         formatted_lines = []
         for m in all_msgs:
             sender_label = "我" if m["sender"] == "me" else "對方"
             formatted_lines.append(f"[{m['sent_at']}] {sender_label}: {m['content']}")
         full_text = "\n".join(formatted_lines)
 
-        # 呼叫專屬全量深度分析 Prompt
-        summary_card = self.llm_client.generate_full_history_summary(
+        # 1. 深度生成 7 大章節全景長篇復盤
+        full_history_summary = self.llm_client.generate_full_history_summary(
             display_name=display_name,
             full_conversations_text=full_text
         )
-
-        update_contact_summary(contact_id, summary_card, db_path=db_path)
+        update_contact_full_history(contact_id, full_history_summary, db_path=db_path)
+        update_contact_summary(contact_id, full_history_summary, db_path=db_path)
 
         return {
             "contact_id": contact_id,
             "target_username": target_username,
             "total_messages": len(all_msgs),
-            "summary_card": summary_card
+            "summary_card": full_history_summary,
+            "full_history_summary": full_history_summary
         }
 
     def sync_messages(
@@ -251,7 +301,8 @@ class IngestionPipeline:
 
         inserted_count = save_messages(contact_id=contact_id, messages=processed_msgs, db_path=db_path)
 
-        chunks = self.chunk_messages(processed_msgs)
+        # 批次萃取事件條目並寫入向量庫
+        chunks = self.extract_event_chunks(processed_msgs)
         if chunks:
             self.vector_store.add_chunks(contact_id=contact_id, chunks=chunks)
 
@@ -301,13 +352,13 @@ class IngestionPipeline:
         contact_id = get_or_create_contact(ig_account_id=target_username, display_name=target_username, db_path=db_path)
         inserted_count = save_messages(contact_id=contact_id, messages=processed_msgs, db_path=db_path)
 
-        chunks = self.chunk_messages(processed_msgs)
+        # 萃取事件記憶
+        chunks = self.extract_event_chunks(processed_msgs)
         if chunks:
             self.vector_store.add_chunks(contact_id=contact_id, chunks=chunks)
 
         all_text = "\n".join([f"{'我' if m['sender']=='me' else '對方'}: {m['content']}" for m in processed_msgs])
-        summary_card = self.llm_client.generate_summary(all_text[:4000])
-
+        summary_card = self.llm_client.generate_concise_summary(all_text[:4000])
         update_contact_summary(contact_id, summary_card, db_path=db_path)
 
         return {
@@ -327,19 +378,12 @@ class IngestionPipeline:
         progress_callback: Optional[Callable[[int, int], None]] = None,
         db_path: Optional[Any] = None
     ) -> Dict[str, Any]:
-        """
-        慢速防風控全量抓取指定對象的歷史訊息。
-        - 採用 3~7 秒分頁隨機延遲＋每 5 頁（約 100 則）休眠 25 秒防範被判定為 robot。
-        - 抓回訊息全部經過 SQLite UNIQUE 去重，絕不重複儲存。
-        - 下載完畢後，清空舊向量庫並重新按完整脈絡 chunking + embedding。
-        - 以完整歷史對話更新人物關係摘要卡。
-        """
+        """慢速防風控全量抓取指定對象的歷史訊息並重構向量庫。"""
         thread = ig_client.get_thread_by_username(target_username)
         if not thread:
             raise ValueError(f"找不到與 {target_username} 的私訊對話串")
 
         thread_id = str(thread.id)
-        # 啟動擬真人慢速防風控爬取（大標準差隨機延遲，每 4~7 頁深度休眠 35~80 秒）
         raw_messages = ig_client.get_thread_messages(
             thread_id=thread_id,
             amount=max_amount,
@@ -364,17 +408,14 @@ class IngestionPipeline:
             })
 
         contact_id = get_or_create_contact(ig_account_id=target_username, display_name=target_username, db_path=db_path)
-
-        # 1. 寫入 SQLite：利用 ig_item_id UNIQUE 去重，既有舊紀錄會自動跳過 (continue)
         inserted_count = save_messages(contact_id=contact_id, messages=processed_msgs, db_path=db_path)
 
-        # 2. 全量重構向量資料庫：使用本地所有完整訊息重新按時間軸切塊，確保向量無重複且語意段落完整
+        # 重建向量資料庫
         rebuild_res = self.rebuild_vectors(target_username, db_path=db_path)
 
-        # 3. 重新提取全局人物關係摘要卡
+        # 重新生成人物關係日常摘要卡
         all_msgs = get_all_messages(contact_id, db_path=db_path)
         all_text = "\n".join([f"{'我' if m['sender']=='me' else '對方'}: {m['content']}" for m in all_msgs])
-        # 取最新 4000 字元與最初 2000 字元綜合呈現大局動態
         context_for_summary = all_text[-4000:] if len(all_text) <= 6000 else (all_text[:2000] + "\n...\n" + all_text[-4000:])
         summary_card = self.llm_client.generate_summary(context_for_summary)
         update_contact_summary(contact_id, summary_card, db_path=db_path)
@@ -394,10 +435,7 @@ class IngestionPipeline:
         target_username: str,
         db_path: Optional[Any] = None
     ) -> Dict[str, Any]:
-        """
-        從 SQLite 中已儲存的訊息重建 ChromaDB 向量庫。
-        不需要登入 IG，適合 embedding 失敗後的本地修復。
-        """
+        """從本地 SQLite 重建向量庫（事件條目化向量化）。"""
         contact_row = get_contact_by_username(target_username, db_path=db_path)
         if not contact_row:
             raise ValueError(f"尚未追蹤 {target_username}，請先使用 track 指令。")
@@ -407,7 +445,6 @@ class IngestionPipeline:
         if not all_msgs:
             raise ValueError(f"{target_username} 在本地資料庫尚無任何訊息紀錄。")
 
-        # 轉換為 ingestion 標準格式
         msg_dicts = [
             {
                 "ig_item_id": row["ig_item_id"],
@@ -418,15 +455,16 @@ class IngestionPipeline:
             for row in all_msgs
         ]
 
-        # 先清除該 contact 舊有的 ChromaDB 向量，避免重複
         try:
             self.vector_store.collection.delete(
                 where={"contact_id": contact_id}
             )
         except Exception:
-            pass  # 若原本就是空的，忽略
+            pass
 
-        chunks = self.chunk_messages(msg_dicts)
+        chunks = self.extract_event_chunks(msg_dicts)
+        if not chunks:
+            chunks = self.chunk_messages(msg_dicts)
         self.vector_store.add_chunks(contact_id=contact_id, chunks=chunks)
 
         return {
@@ -435,4 +473,3 @@ class IngestionPipeline:
             "total_messages": len(msg_dicts),
             "chunks_rebuilt": len(chunks),
         }
-

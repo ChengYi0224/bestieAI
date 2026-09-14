@@ -3,8 +3,8 @@ rate_limit.py — 統一的速率限制與重試工具。
 
 支援：
 - IG API：ClientThrottledError、PleaseWaitFewMinutes → 30 分鐘等待後繼續
-- Gemini API：ClientError 429 → 短指數退避（最多 3 次），超過則 30 分鐘等待
-- 分頁請求間：每頁強制插入 jitter 延遲
+- Gemini API：ClientError 429/503 → 快速重試 2 次後切換候選模型
+- 分頁請求間：每頁強制插入帶長尾微停頓之 jitter 延遲
 """
 import time
 import random
@@ -18,7 +18,7 @@ from instagrapi.exceptions import (
     ClientForbiddenError,
     RateLimitError,
 )
-from google.genai.errors import ClientError
+from google.genai.errors import ClientError, ServerError, APIError
 
 logger = logging.getLogger("bestieAI.rate_limit")
 
@@ -35,8 +35,6 @@ _IG_THROTTLE_EXCEPTIONS = (
     RateLimitError,
 )
 
-
-from google.genai.errors import ClientError, ServerError, APIError
 
 def _is_gemini_retryable_error(exc: Exception) -> bool:
     """判斷是否為 Gemini 可重試錯誤（429 頻率限制、503 伺服器過載、500/502/504 暫時中斷）。"""
@@ -86,7 +84,14 @@ def ig_retry(max_retries: int = 1) -> Callable[[F], F]:
                     return func(*args, **kwargs)
                 except _IG_THROTTLE_EXCEPTIONS as e:
                     if attempt < max_retries:
-                        wait_with_log(LONG_WAIT_SECONDS, reason=f"IG {type(e).__name__}")
+                        try:
+                            import app.core.rate_limit as _rl
+                            wait_fn = getattr(_rl, "wait_with_log", wait_with_log)
+                            wait_sec = getattr(_rl, "LONG_WAIT_SECONDS", LONG_WAIT_SECONDS)
+                        except Exception:
+                            wait_fn = wait_with_log
+                            wait_sec = LONG_WAIT_SECONDS
+                        wait_fn(wait_sec, reason=f"IG {type(e).__name__}")
                     else:
                         logger.error(f"IG 限速，已重試 {max_retries} 次仍失敗，拋出例外。")
                         raise

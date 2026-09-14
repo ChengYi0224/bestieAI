@@ -1,8 +1,8 @@
 import sys
 import signal
 import logging
-from app.db import init_db
-from app.poller import BotPoller
+from app.storage.db import init_db
+from app.bot.poller import BotPoller
 
 logging.basicConfig(
     level=logging.INFO,

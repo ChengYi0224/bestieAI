@@ -1,20 +1,35 @@
+"""
+llm_service.py — Gemini LLM 整合服務。
+
+提供：
+- 多候選模型容錯降級切換
+- input/output 明文結構化日誌記錄
+- 閨蜜回覆生成 (generate_reply)
+- 對話事件萃取 (extract_events)
+- 日常精簡摘要卡生成 (generate_concise_summary / generate_summary)
+- 全景深度復盤長文生成 (generate_full_history_summary)
+- 使用者個人記憶萃取 (extract_self_info)
+"""
 import time
 import logging
+import functools
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List
 from google import genai
-from app.config import settings
-from app.rate_limit import gemini_retry, _is_gemini_retryable_error
 
-logger = logging.getLogger("bestieAI.llm")
+from app.core.config import settings
+from app.core.rate_limit import gemini_retry, _is_gemini_retryable_error
 
-PROMPTS_DIR = Path(__file__).parent / "prompts"
+logger = logging.getLogger("bestieAI.llm_service")
+
+PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 SYSTEM_PROMPT_PATH = PROMPTS_DIR / "system.txt"
 SUMMARY_PROMPT_PATH = PROMPTS_DIR / "summary.txt"
 FULL_SUMMARY_PROMPT_PATH = PROMPTS_DIR / "full_summary.txt"
 EXTRACT_SELF_PROMPT_PATH = PROMPTS_DIR / "extract_self.txt"
-PROMPT_TEMPLATE_PATH = SYSTEM_PROMPT_PATH  # 相容舊常數名稱
+EXTRACT_EVENTS_PROMPT_PATH = PROMPTS_DIR / "extract_events.txt"
+PROMPT_TEMPLATE_PATH = SYSTEM_PROMPT_PATH
 
 # 依優先順序嘗試的模型陣列
 CANDIDATE_MODELS: List[str] = [
@@ -87,7 +102,6 @@ def log_llm_call(
 
 def log_llm_execution(func):
     """Decorator：自動計算耗時並在執行成功或拋出異常時寫入 llm.log。"""
-    import functools
     @functools.wraps(func)
     def wrapper(self, model: str, prompt: str, *args, **kwargs):
         start_t = time.time()
@@ -130,11 +144,17 @@ class LLMClient:
         )
         return response.text
 
-    def _generate_with_fallback(self, prompt: str, preferred_model: Optional[str] = None) -> str:
+    def _generate_with_fallback(
+        self,
+        prompt: str,
+        preferred_model: Optional[str] = None,
+        candidate_models: Optional[List[str]] = None
+    ) -> str:
         """
         依序嘗試候選模型陣列，若遇到 503 過載、404 不支援或速率限制，自動依序切換降級至下一個模型。
         """
-        models_to_try = list(self.candidate_models)
+        base_models = candidate_models or self.candidate_models
+        models_to_try = list(base_models)
         if preferred_model:
             if preferred_model in models_to_try:
                 models_to_try.remove(preferred_model)
@@ -184,6 +204,52 @@ class LLMClient:
         if not result or result == "無" or result.startswith("無。") or result.startswith("無\n"):
             return ""
         return result
+
+    def extract_events(self, conversations_text: str, model: Optional[str] = None) -> List[str]:
+        """
+        將一段對話紀錄提煉為 1~4 條帶時間標記的事實/事件記憶條目。
+        徹底去除無意義破碎口語。若無具體事件則回傳空列表。
+        """
+        if not conversations_text.strip():
+            return []
+        template = EXTRACT_EVENTS_PROMPT_PATH.read_text(encoding="utf-8")
+        prompt = template.format(conversations_text=conversations_text)
+        candidates = getattr(settings, "event_extraction_models_list", None)
+        raw_output = self._generate_with_fallback(prompt, preferred_model=model, candidate_models=candidates).strip()
+
+        if not raw_output or "無重要事件" in raw_output:
+            return []
+
+        events = []
+        for line in raw_output.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith(("- ", "• ", "* ")):
+                line = line[2:].strip()
+            elif line.startswith(("1.", "2.", "3.", "4.", "5.")):
+                line = line[2:].strip()
+            if line and "無重要事件" not in line:
+                events.append(line)
+        return events
+
+    def generate_concise_summary(self, full_summary_or_convs: str, model: Optional[str] = None) -> str:
+        """
+        將全景復盤長文或長對話提煉為 300~500 字的精簡日常人物摘要卡。
+        包含：關係定調、相處核心模式、主要雷點/偏好、目前應對建議。
+        """
+        prompt = (
+            "你是一位專業的人際關係顧問。請根據以下這份全景歷史分析或對話內容，"
+            "提煉出一份嚴格控制在 300~500 字以內的「日常輕量人物摘要卡」。\n"
+            "這張卡片是用於日常陪聊時的快速人設邊界參考，切勿冗長，請精確包含：\n"
+            "1. 【關係定調】：雙方目前客觀關係與信任程度（50字內）\n"
+            "2. 【相處模式與風格】：互動頻率、回覆習慣、聊天氛圍（80字內）\n"
+            "3. 【關鍵雷點與偏好】：對方介意的事、喜歡的話題或相處禁忌（100字內）\n"
+            "4. 【當前應對建議】：目前與對方互動時最適合的心態或策略（80字內）\n\n"
+            f"資料來源如下：\n{full_summary_or_convs[:10000]}"
+        )
+        candidates = getattr(settings, "event_extraction_models_list", None)
+        return self._generate_with_fallback(prompt, preferred_model=model, candidate_models=candidates).strip()
 
     def generate_summary(self, conversations_text: str, model: Optional[str] = None) -> str:
         template = SUMMARY_PROMPT_PATH.read_text(encoding="utf-8")

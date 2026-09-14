@@ -2,8 +2,8 @@ import pytest
 from unittest.mock import MagicMock
 from instagrapi import Client
 from instagrapi.realtime import RealtimeClient
-from app.poller import BotPoller
-from app.ig import IGClient
+from app.bot.poller import BotPoller
+from app.services.ig_service import IGClient
 
 def test_poller_setup_realtime_contract():
     """驗證 BotPoller._setup_realtime 呼叫的函式真實存在於 instagrapi.Client 與 RealtimeClient"""
