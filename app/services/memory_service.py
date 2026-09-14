@@ -21,6 +21,22 @@ from app.storage.vectors import VectorStore
 
 logger = logging.getLogger("bestieAI.memory_service")
 
+# ==================== 可調參數與檢索筆數設定 (Tunable Constants) ====================
+# 目標對象事件向量檢索筆數
+CONTACT_RAG_RESULTS: int = getattr(settings, "CONTACT_RAG_RESULTS", 5)
+
+# 使用者自我事實向量檢索筆數
+SELF_RAG_RESULTS: int = getattr(settings, "SELF_RAG_RESULTS", 3)
+
+# 跨對象暱稱關聯檢索筆數
+CROSS_RAG_RESULTS: int = getattr(settings, "CROSS_RAG_RESULTS", 3)
+
+# 提示詞載入之近期原始私訊則數
+RECENT_MESSAGES_LIMIT: int = getattr(settings, "RECENT_MESSAGES_LIMIT", 30)
+
+# 提示詞載入之最近對話歷史輪數
+CHAT_HISTORY_TURNS: int = getattr(settings, "CHAT_HISTORY_TURNS", 10)
+
 
 class MemoryManager:
     def __init__(

@@ -101,7 +101,7 @@ class Settings(BaseSettings):
 
     # ==================== 速率節流與向量分群門檻 ====================
     # 批次 LLM 呼叫間隔節流（秒，避開免費層 15 RPM 上限，測試環境可設為 0）
-    GEMINI_PACING_DELAY: float = Field(default=4.2)
+    GEMINI_PACING_DELAY: float = Field(default=4.5)
 
     # 事件時序向量分群餘弦相似度門檻（>= 0.80 進入同質無損融合候選群）
     EVENT_CLUSTER_SIMILARITY_THRESHOLD: float = Field(default=0.80)

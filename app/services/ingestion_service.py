@@ -30,6 +30,26 @@ from app.services.ig_service import IGClient
 
 logger = logging.getLogger("bestieAI.ingestion_service")
 
+# ==================== 可調參數與門檻設定 (Tunable Constants) ====================
+# 向量餘弦相似度門檻（>= 此數值判定為同主題候選群）
+SIMILARITY_THRESHOLD: float = getattr(settings, "EVENT_CLUSTER_SIMILARITY_THRESHOLD", 0.80)
+
+# 時序向量分群最大時間差（小時，超過此時間差即使相似度高也不合併）
+MAX_HOURS_GAP: float = getattr(settings, "EVENT_CLUSTER_MAX_HOURS_GAP", 36.0)
+
+# 批次呼叫間隔節流延遲（秒，避開 15 RPM 上限）
+PACING_DELAY: float = getattr(settings, "GEMINI_PACING_DELAY", 4.2)
+
+# 事件提煉單批對話訊息筆數
+EVENT_EXTRACTION_BATCH_SIZE: int = getattr(settings, "EVENT_EXTRACTION_BATCH_SIZE", 40)
+
+# 傳統切塊單一 chunk 最大則數
+CHUNK_MAX_SIZE: int = getattr(settings, "CHUNK_MAX_SIZE", 20)
+
+# 觸發更新摘要卡的新訊息門檻與天數上限
+SUMMARY_MESSAGE_THRESHOLD: int = getattr(settings, "SUMMARY_MESSAGE_THRESHOLD", 50)
+SUMMARY_DAYS_LIMIT: int = getattr(settings, "SUMMARY_DAYS_LIMIT", 14)
+
 
 class IngestionPipeline:
     def __init__(self, vector_store: Optional[VectorStore] = None, llm_client: Optional[LLMClient] = None):

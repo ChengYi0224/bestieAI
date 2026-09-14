@@ -17,6 +17,16 @@ from google.genai import types
 from app.core.config import settings
 from app.core.rate_limit import gemini_retry
 
+# ==================== 可調參數與維度設定 (Tunable Constants) ====================
+# 預設 Embedding 模型名稱
+DEFAULT_EMBEDDING_MODEL: str = getattr(settings, "GEMINI_EMBEDDING_MODEL", "gemini-embedding-2")
+
+# 向量輸出維度（MRL 768 維）
+DEFAULT_EMBEDDING_DIMENSIONALITY: int = getattr(settings, "EMBEDDING_DIMENSIONALITY", 768)
+
+# 向量空間度量方式（cosine / l2 / ip）
+DEFAULT_DISTANCE_METRIC: str = "cosine"
+
 
 class VectorStore:
     def __init__(
