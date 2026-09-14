@@ -31,8 +31,8 @@ flowchart TD
 
 | 編號與文件 | 核心主旨 | 解決的關鍵問題 |
 | :--- | :--- | :--- |
-| [01_event_extraction.md](file:///c:/ChengYi224/AppDev/bestieAI/docs/rag/01_event_extraction.md) | 微觀事件提煉與 15 RPM 速率節流 | 揚棄原始碎句雜訊、避開 Gemini 429 限速 |
-| [02_vector_clustering.md](file:///c:/ChengYi224/AppDev/bestieAI/docs/rag/02_vector_clustering.md) | 時序感知語意向量分群 | 篩出高相似候選群，節省 80%+ LLM 呼叫 |
-| [03_lossless_consolidation.md](file:///c:/ChengYi224/AppDev/bestieAI/docs/rag/03_lossless_consolidation.md) | 同質無損融合與異質保留 | 消除跨批次重複事件，杜絕 Top-K 霸佔 |
-| [04_chroma_storage.md](file:///c:/ChengYi224/AppDev/bestieAI/docs/rag/04_chroma_storage.md) | 雙軌集合儲存架構與維護 | `chat_events` 與 `self_memory` 隔離與重建 |
-| [05_query_and_assembly.md](file:///c:/ChengYi224/AppDev/bestieAI/docs/rag/05_query_and_assembly.md) | 共享 Query 向量檢索與 Prompt 組裝 | 消除重複 Embedding 延遲，維持 < 3s 回覆 |
+| [01_微觀事件提煉與節流.md](01_微觀事件提煉與節流.md) | 微觀事件提煉與 15 RPM 速率節流 | 揚棄原始碎句雜訊、避開 Gemini 429 限速 |
+| [02_時序語意向量分群.md](02_時序語意向量分群.md) | 時序感知語意向量分群 | 篩出高相似候選群，節省 80%+ LLM 呼叫 |
+| [03_同質無損融合去重.md](03_同質無損融合去重.md) | 同質無損融合與異質保留 | 消除跨批次重複事件，杜絕 Top-K 霸佔 |
+| [04_Chroma向量儲存架構.md](04_Chroma向量儲存架構.md) | 雙軌集合儲存架構與維護 | `chat_events` 與 `self_memory` 隔離與重建 |
+| [05_共享檢索與Prompt組裝.md](05_共享檢索與Prompt組裝.md) | 共享 Query 向量檢索與 Prompt 組裝 | 消除重複 Embedding 延遲，維持 < 3s 回覆 |
