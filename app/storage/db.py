@@ -77,6 +77,18 @@ def init_db(db_path: Optional[Path] = None) -> None:
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS contact_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+            event_id TEXT,
+            content TEXT NOT NULL,
+            start_time TEXT,
+            end_time TEXT,
+            message_count INTEGER DEFAULT 1,
+            status TEXT DEFAULT 'raw',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+
         INSERT OR IGNORE INTO bot_state (id, active_contact_id, pending_selection, worker_status, updated_at)
         VALUES (1, NULL, NULL, NULL, CURRENT_TIMESTAMP);
         """)
@@ -218,3 +230,32 @@ def set_contact_nickname(contact_id: int, nickname: Optional[str], db_path: Opti
 def get_contacts_with_nickname(db_path: Optional[Path] = None) -> List[sqlite3.Row]:
     from app.storage.repositories import ContactRepository
     return ContactRepository(db_path).get_with_nickname()
+
+
+def save_contact_events(
+    contact_id: int,
+    events: List[Dict[str, Any]],
+    status: str = "raw",
+    db_path: Optional[Path] = None
+) -> int:
+    from app.storage.repositories import EventRepository
+    return EventRepository(db_path).save_events(contact_id, events, status=status)
+
+
+def get_contact_events(
+    contact_id: int,
+    status: Optional[str] = None,
+    db_path: Optional[Path] = None
+) -> List[sqlite3.Row]:
+    from app.storage.repositories import EventRepository
+    return EventRepository(db_path).get_events(contact_id, status=status)
+
+
+def clear_contact_events(
+    contact_id: int,
+    status: Optional[str] = None,
+    db_path: Optional[Path] = None
+) -> None:
+    from app.storage.repositories import EventRepository
+    EventRepository(db_path).clear_events(contact_id, status=status)
+

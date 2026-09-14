@@ -48,6 +48,28 @@ def test_batch_embedding_and_dimensionality(monkeypatch):
     assert call_kwargs["config"].output_dimensionality == 768
 
 
+def test_batch_embedding_chunking_over_100():
+    """驗證當文字數量超過 100 筆時，VectorStore 會自動拆成多次批次請求（避開 100 上限）。"""
+    mock_genai_client = MagicMock()
+    mock_resp_1 = MagicMock()
+    mock_resp_1.embeddings = [MagicMock(values=[0.1] * 768) for _ in range(100)]
+    mock_resp_2 = MagicMock()
+    mock_resp_2.embeddings = [MagicMock(values=[0.2] * 768) for _ in range(50)]
+    mock_genai_client.models.embed_content.side_effect = [mock_resp_1, mock_resp_2]
+
+    vs = VectorStore()
+    vs._genai_client = mock_genai_client
+
+    texts = [f"事件 {i}" for i in range(150)]
+    embs = vs.get_embeddings_batch(texts)
+
+    assert len(embs) == 150
+    assert mock_genai_client.models.embed_content.call_count == 2
+    calls = mock_genai_client.models.embed_content.call_args_list
+    assert len(calls[0].kwargs["contents"]) == 100
+    assert len(calls[1].kwargs["contents"]) == 50
+
+
 def test_shared_query_embedding_in_memory_service(tmp_path):
     """驗證 MemoryManager 在查詢多個庫時只計算 1 次 Embedding 向量。"""
     db_file = tmp_path / "shared_emb.db"
@@ -263,4 +285,55 @@ def test_lossless_consolidation_pipeline(monkeypatch):
     scooter_chunk = next(c for c in final_chunks if "拋錨" in c["text"])
     assert scooter_chunk["id"] == "2"
     assert scooter_chunk["message_count"] == 10
+
+
+def test_dialogue_slicing_with_overlap():
+    """驗證時間感知滑動窗口切塊與重疊機制。"""
+    pipeline = IngestionPipeline()
+    # 建立 50 則測試訊息，前 20 則同時間，中間間隔 8 小時，後 30 則
+    messages = []
+    for i in range(20):
+        messages.append({"sent_at": "2026-08-01T10:00:00", "content": f"msg_{i}", "sender": "me"})
+    for i in range(20, 50):
+        messages.append({"sent_at": "2026-08-01T20:00:00", "content": f"msg_{i}", "sender": "them"})
+
+    # target_size=20, overlap=5, gap_hours=6.0
+    batches = pipeline._slice_dialogue_batches(messages, target_size=20, max_size=30, overlap_size=5, gap_hours=6.0)
+    assert len(batches) >= 2
+    # 第一批切在自然斷點 (20 則)
+    assert len(batches[0]) == 20
+    # 第二批開頭應包含前一批末端 5 則重疊訊息 (msg_15~19)
+    assert batches[1][0]["content"] == "msg_15"
+
+
+def test_batch_clusters_consolidation_call():
+    """驗證多 Cluster 批次打包融合：一次 API 呼叫整合多群組。"""
+    mock_llm = MagicMock()
+    mock_llm.consolidate_clusters_batch.return_value = {
+        "group_0": ["[2026-08-15] 沖繩行程已合併"],
+        "group_1": ["[2026-08-16] 宜蘭行程已合併"],
+    }
+
+    pipeline = IngestionPipeline(llm_client=mock_llm)
+    # 提供兩個已預先分好的多條 Cluster
+    clusters = [
+        [
+            {"id": "0", "text": "沖繩討論A", "start_time": "2026-08-15T10:00:00", "end_time": "2026-08-15T10:30:00"},
+            {"id": "1", "text": "沖繩討論B", "start_time": "2026-08-15T11:00:00", "end_time": "2026-08-15T11:30:00"},
+        ],
+        [
+            {"id": "2", "text": "宜蘭行程A", "start_time": "2026-08-16T10:00:00", "end_time": "2026-08-16T10:30:00"},
+            {"id": "3", "text": "宜蘭行程B", "start_time": "2026-08-16T11:00:00", "end_time": "2026-08-16T11:30:00"},
+        ]
+    ]
+
+    all_chunks = clusters[0] + clusters[1]
+    final = pipeline.consolidate_event_chunks(all_chunks, precomputed_clusters=clusters)
+
+    assert len(final) == 2
+    mock_llm.consolidate_clusters_batch.assert_called_once()
+    called_dict = mock_llm.consolidate_clusters_batch.call_args[0][0]
+    assert len(called_dict) == 2
+    assert "group_0" in called_dict and "group_1" in called_dict
+
 

@@ -103,11 +103,14 @@ class Settings(BaseSettings):
     # 批次 LLM 呼叫間隔節流（秒，避開免費層 15 RPM 上限，測試環境可設為 0）
     GEMINI_PACING_DELAY: float = Field(default=4.5)
 
-    # 事件時序向量分群餘弦相似度門檻（>= 0.80 進入同質無損融合候選群）
-    EVENT_CLUSTER_SIMILARITY_THRESHOLD: float = Field(default=0.80)
+    # 事件時序向量分群餘弦相似度門檻（>= 0.90 進入同質無損融合候選群）
+    EVENT_CLUSTER_SIMILARITY_THRESHOLD: float = Field(default=0.90)
 
-    # 事件時序向量分群最大時間差（小時，預設 36 小時以包含跨日話題）
-    EVENT_CLUSTER_MAX_HOURS_GAP: float = Field(default=36.0)
+    # 事件時序向量分群最大時間差（小時，預設 24 小時以控制同主題跨度）
+    EVENT_CLUSTER_MAX_HOURS_GAP: float = Field(default=24.0)
+
+    # 單一分群最大條目數（避免群組過大混雜）
+    EVENT_MAX_CLUSTER_SIZE: int = Field(default=4)
 
     @property
     def candidate_models_list(self) -> list[str]:

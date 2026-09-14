@@ -6,7 +6,10 @@ vectors.py — ChromaDB 向量資料庫封裝。
 - 支援 output_dimensionality=768 維度限制（大幅降低延遲與空間）
 - 支援傳入既有 query_embedding 共享單次 Embedding，消除重複 API 呼叫
 """
+import re
+import time
 import uuid
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -17,6 +20,8 @@ from google.genai import types
 from app.core.config import settings
 from app.core.rate_limit import gemini_retry
 
+logger = logging.getLogger("bestieAI.vectors")
+
 # ==================== 可調參數與維度設定 (Tunable Constants) ====================
 # 預設 Embedding 模型名稱
 DEFAULT_EMBEDDING_MODEL: str = getattr(settings, "GEMINI_EMBEDDING_MODEL", "gemini-embedding-2")
@@ -26,6 +31,9 @@ DEFAULT_EMBEDDING_DIMENSIONALITY: int = getattr(settings, "EMBEDDING_DIMENSIONAL
 
 # 向量空間度量方式（cosine / l2 / ip）
 DEFAULT_DISTANCE_METRIC: str = "cosine"
+
+# Gemini 批次 Embedding API 單次最大請求筆數上限（官方硬限制為 100）
+MAX_EMBEDDING_BATCH_SIZE: int = 100
 
 
 class VectorStore:
@@ -54,28 +62,58 @@ class VectorStore:
             self._genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
         return self._genai_client
 
-    @gemini_retry(max_short_retries=3, base_delay=3.0)
     def get_embeddings_batch(self, texts: List[str]) -> List[List[float]]:
-        """使用 Gemini 批次 API 一次向量化多筆文本，並指定 768 維度。"""
+        """
+        使用 Gemini 批次 API 向量化多筆文本，並指定 768 維度。
+        若 texts 超過單次批次上限 (100 筆)，自動分段批次處理並合併回傳。
+        具備 Google Free Tier 每分鐘配額 (100 requests/min) 智慧感應與自動退避等待機制。
+        """
         if not texts:
             return []
 
         config = None
-        dim = getattr(settings, "EMBEDDING_DIMENSIONALITY", 768)
+        dim = getattr(settings, "EMBEDDING_DIMENSIONALITY", DEFAULT_EMBEDDING_DIMENSIONALITY)
         if dim:
             config = types.EmbedContentConfig(output_dimensionality=dim)
 
-        content_items = [
-            types.Content(parts=[types.Part.from_text(text=t)])
-            for t in texts
-        ]
+        all_embeddings: List[List[float]] = []
+        total_batches = (len(texts) + MAX_EMBEDDING_BATCH_SIZE - 1) // MAX_EMBEDDING_BATCH_SIZE
 
-        response = self.genai_client.models.embed_content(
-            model=self.embedding_model,
-            contents=content_items,
-            config=config
-        )
-        return [emb.values for emb in response.embeddings]
+        for batch_idx, i in enumerate(range(0, len(texts), MAX_EMBEDDING_BATCH_SIZE)):
+            batch = texts[i:i + MAX_EMBEDDING_BATCH_SIZE]
+            content_items = [
+                types.Content(parts=[types.Part.from_text(text=t)])
+                for t in batch
+            ]
+
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    response = self.genai_client.models.embed_content(
+                        model=self.embedding_model,
+                        contents=content_items,
+                        config=config
+                    )
+                    all_embeddings.extend([emb.values for emb in response.embeddings])
+                    break
+                except Exception as e:
+                    err_msg = str(e)
+                    is_rate_limit = "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg
+                    if is_rate_limit and attempt < max_retries - 1:
+                        wait_sec = 60.0
+                        m = re.search(r"retry in ([\d\.]+)s", err_msg)
+                        if not m:
+                            m = re.search(r"retryDelay': '(\d+)s'", err_msg)
+                        if m:
+                            wait_sec = float(m.group(1)) + 2.0
+                        logger.warning(
+                            f"Gemini Embedding 達到每分鐘配額上限 (429)，自動等待 {wait_sec:.1f} 秒重置配額視窗 (批次 {batch_idx + 1}/{total_batches})..."
+                        )
+                        time.sleep(wait_sec)
+                    else:
+                        raise
+
+        return all_embeddings
 
     def get_embedding(self, text: str) -> List[float]:
         """取得單一文本向量。"""

@@ -15,7 +15,7 @@ import logging
 import functools
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from google import genai
 
 from app.core.config import settings
@@ -30,6 +30,7 @@ FULL_SUMMARY_PROMPT_PATH = PROMPTS_DIR / "full_summary.txt"
 EXTRACT_SELF_PROMPT_PATH = PROMPTS_DIR / "extract_self.txt"
 EXTRACT_EVENTS_PROMPT_PATH = PROMPTS_DIR / "extract_events.txt"
 CONSOLIDATE_EVENTS_PROMPT_PATH = PROMPTS_DIR / "consolidate_events.txt"
+CONSOLIDATE_CLUSTERS_BATCH_PROMPT_PATH = PROMPTS_DIR / "consolidate_clusters_batch.txt"
 PROMPT_TEMPLATE_PATH = SYSTEM_PROMPT_PATH
 
 # 依優先順序嘗試的模型陣列
@@ -266,6 +267,53 @@ class LLMClient:
                 consolidated.append(line)
 
         return consolidated if consolidated else cluster_events
+
+    def consolidate_clusters_batch(
+        self,
+        clusters_dict: Dict[str, List[str]],
+        model: Optional[str] = None
+    ) -> Dict[str, List[str]]:
+        """
+        一次性打包最多 20 個獨立 Cluster 進行批次無損融合（節省 90% 以上 RPD 呼叫）。
+        輸入格式：{"cluster_1": ["事件1", "事件2"], "cluster_2": [...]}
+        回傳格式：{"cluster_1": ["融合後條目"], "cluster_2": [...]}
+        """
+        if not clusters_dict:
+            return {}
+
+        payload_blocks = []
+        for cid, events in clusters_dict.items():
+            ev_text = "\n".join(f"- {e}" for e in events)
+            payload_blocks.append(f'<cluster id="{cid}">\n{ev_text}\n</cluster>')
+        payload = "\n\n".join(payload_blocks)
+
+        template = CONSOLIDATE_CLUSTERS_BATCH_PROMPT_PATH.read_text(encoding="utf-8")
+        prompt = template.format(clusters_payload=payload)
+        candidates = getattr(settings, "event_extraction_models_list", None)
+        raw_output = self._generate_with_fallback(prompt, preferred_model=model, candidate_models=candidates).strip()
+
+        results: Dict[str, List[str]] = {}
+        pattern = r'<cluster_result\s+id="([^"]+)">([\s\S]*?)</cluster_result>'
+        matches = re.findall(pattern, raw_output)
+
+        for cid, block in matches:
+            lines = []
+            for line in block.strip().splitlines():
+                line = line.strip()
+                if line.startswith(("- ", "• ", "* ")):
+                    line = line[2:].strip()
+                elif re.match(r"^\d+\.", line):
+                    line = re.sub(r"^\d+\.\s*", "", line)
+                if line:
+                    lines.append(line)
+            if lines:
+                results[cid] = lines
+
+        for cid, original_events in clusters_dict.items():
+            if cid not in results or not results[cid]:
+                results[cid] = original_events
+
+        return results
 
     def generate_concise_summary(self, full_summary_or_convs: str, model: Optional[str] = None) -> str:
         """
