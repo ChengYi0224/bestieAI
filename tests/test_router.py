@@ -137,7 +137,8 @@ def test_chat_history_in_reply(tmp_path):
         "摘要卡內容",
         "RAG chunks",
         "近期訊息",
-        "你: 他說今天不想聊\nAI: 可能他只是累了，不一定是針對你"
+        "你: 他說今天不想聊\nAI: 可能他只是累了，不一定是針對你",
+        "我最近換了新工作"
     )
     mock_llm = MagicMock()
     mock_llm.generate_reply.return_value = "好，那你現在怎麼想？"
@@ -150,3 +151,38 @@ def test_chat_history_in_reply(tmp_path):
     assert "chat_history" in call_kwargs
     assert "他說今天不想聊" in call_kwargs["chat_history"]
     assert reply == "好，那你現在怎麼想？"
+
+
+def test_card_command(tmp_path):
+    from app.db import init_db, get_or_create_contact, set_active_contact, update_contact_summary, set_contact_nickname
+    from app.router import CommandRouter
+
+    db_file = tmp_path / "card_test.db"
+    init_db(db_file)
+
+    c_id = get_or_create_contact("amy_lee", "Amy", db_path=db_file)
+    set_contact_nickname(c_id, "愛咪", db_path=db_file)
+    update_contact_summary(c_id, "這是 Amy 的關係深度復盤摘要內容", db_path=db_file)
+
+    router = CommandRouter(memory_manager=MagicMock(), llm_client=MagicMock(), db_path=db_file)
+
+    # 1. 未 select 時直接指定帳號或暱稱查詢
+    res_direct = router.handle_message("card amy_lee")
+    assert "amy_lee" in res_direct
+    assert "愛咪" in res_direct
+    assert "這是 Amy 的關係深度復盤摘要內容" in res_direct
+
+    res_by_nick = router.handle_message("摘要 愛咪")
+    assert "amy_lee" in res_by_nick
+    assert "這是 Amy 的關係深度復盤摘要內容" in res_by_nick
+
+    # 2. select 作用對象後不帶參數直接輸入 card
+    set_active_contact("amy_lee", db_path=db_file)
+    res_active = router.handle_message("card")
+    assert "這是 Amy 的關係深度復盤摘要內容" in res_active
+
+    # 3. 查無對象或尚未建立摘要卡
+    get_or_create_contact("no_summary_user", "NoSummary", db_path=db_file)
+    res_empty = router.handle_message("card no_summary_user")
+    assert "目前尚未建立摘要卡" in res_empty
+

@@ -13,6 +13,7 @@ from app.db import (
     get_recent_messages,
     get_all_messages,
 )
+from app.config import settings
 from app.vectors import VectorStore
 from app.llm import LLMClient
 from app.ig import IGClient
@@ -31,7 +32,8 @@ class IngestionPipeline:
         return cleaned if cleaned else "[圖片/貼圖/非文字訊息]"
 
     @staticmethod
-    def chunk_messages(messages: List[Dict[str, Any]], max_chunk_size: int = 20) -> List[Dict[str, Any]]:
+    def chunk_messages(messages: List[Dict[str, Any]], max_chunk_size: Optional[int] = None) -> List[Dict[str, Any]]:
+        chunk_sz = max_chunk_size if max_chunk_size is not None else settings.CHUNK_MAX_SIZE
         if not messages:
             return []
 
@@ -44,7 +46,7 @@ class IngestionPipeline:
             sent_time_str = m["sent_at"]
             day_str = sent_time_str.split("T")[0] if "T" in sent_time_str else sent_time_str.split(" ")[0]
 
-            if current_day != day_str or len(current_chunk) >= max_chunk_size:
+            if current_day != day_str or len(current_chunk) >= chunk_sz:
                 if current_chunk:
                     chunks.append(IngestionPipeline._build_chunk_dict(len(chunks) + 1, current_chunk))
                     current_chunk = []

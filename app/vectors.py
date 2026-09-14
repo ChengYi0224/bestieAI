@@ -1,4 +1,6 @@
 import chromadb
+import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from google import genai
@@ -6,13 +8,19 @@ from app.config import settings
 from app.rate_limit import gemini_retry
 
 class VectorStore:
-    def __init__(self, chroma_path: Optional[Path] = None, embedding_model: Optional[str] = None):
+    def __init__(
+        self,
+        chroma_path: Optional[Path] = None,
+        embedding_model: Optional[str] = None,
+        collection_name: str = "chat_chunks"
+    ):
         path = chroma_path or settings.CHROMA_PATH
         path.mkdir(parents=True, exist_ok=True)
         self.embedding_model = embedding_model or settings.GEMINI_EMBEDDING_MODEL
+        self.collection_name = collection_name
         self.client = chromadb.PersistentClient(path=str(path))
         self.collection = self.client.get_or_create_collection(
-            name="chat_chunks",
+            name=collection_name,
             metadata={"hnsw:space": "cosine"}
         )
         self._genai_client = None
@@ -62,6 +70,40 @@ class VectorStore:
         results = self.collection.query(
             query_embeddings=[query_embedding],
             where={"contact_id": contact_id},
+            n_results=n_results
+        )
+
+        matches = []
+        if results and results.get("documents") and results["documents"][0]:
+            docs = results["documents"][0]
+            metas = results.get("metadatas", [[]])[0]
+            dists = results.get("distances", [[]])[0] if results.get("distances") else [None] * len(docs)
+            for doc, meta, dist in zip(docs, metas, dists):
+                matches.append({
+                    "text": doc,
+                    "metadata": meta,
+                    "distance": dist
+                })
+        return matches
+
+    def add_self_chunk(self, text: str, chunk_id: Optional[str] = None) -> str:
+        """寫入使用者自身記憶 chunk 到向量庫。"""
+        cid = chunk_id or f"self_{uuid.uuid4().hex[:12]}"
+        now_str = datetime.utcnow().isoformat()
+        embedding = self.get_embedding(text)
+        self.collection.upsert(
+            ids=[cid],
+            documents=[text],
+            metadatas=[{"created_at": now_str, "type": "self_memory"}],
+            embeddings=[embedding]
+        )
+        return cid
+
+    def query_self(self, query_text: str, n_results: int = 3) -> List[Dict[str, Any]]:
+        """檢索使用者自身記憶，不加 contact_id 過濾。"""
+        query_embedding = self.get_embedding(query_text)
+        results = self.collection.query(
+            query_embeddings=[query_embedding],
             n_results=n_results
         )
 

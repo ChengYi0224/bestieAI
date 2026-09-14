@@ -13,6 +13,7 @@ PROMPTS_DIR = Path(__file__).parent / "prompts"
 SYSTEM_PROMPT_PATH = PROMPTS_DIR / "system.txt"
 SUMMARY_PROMPT_PATH = PROMPTS_DIR / "summary.txt"
 FULL_SUMMARY_PROMPT_PATH = PROMPTS_DIR / "full_summary.txt"
+EXTRACT_SELF_PROMPT_PATH = PROMPTS_DIR / "extract_self.txt"
 PROMPT_TEMPLATE_PATH = SYSTEM_PROMPT_PATH  # 相容舊常數名稱
 
 # 依優先順序嘗試的模型陣列
@@ -158,18 +159,31 @@ class LLMClient:
         recent_context: str,
         user_query: str,
         chat_history: str = "",
+        self_context: str = "",
+        cross_rag: str = "",
         model: Optional[str] = None
     ) -> str:
         template = PROMPT_TEMPLATE_PATH.read_text(encoding="utf-8")
         prompt = template.format(
             display_name=display_name or "對方",
             summary_card=summary_card or "尚無摘要卡紀錄",
+            self_context=self_context or "無相關使用者背景",
+            cross_rag=cross_rag or "無提及特定對象之紀錄",
             rag_chunks=rag_chunks or "無特定相關紀錄",
             recent_context=recent_context or "無近期訊息",
             chat_history=chat_history or "（本輪尚無對話歷史）",
             user_query=user_query
         )
         return self._generate_with_fallback(prompt, preferred_model=model)
+
+    def extract_self_info(self, user_query: str, model: Optional[str] = None) -> str:
+        """從使用者提問中萃取自身生活近況、事實、習慣或偏好。若無則回傳空字串。"""
+        template = EXTRACT_SELF_PROMPT_PATH.read_text(encoding="utf-8")
+        prompt = template.format(user_query=user_query)
+        result = self._generate_with_fallback(prompt, preferred_model=model).strip()
+        if not result or result == "無" or result.startswith("無。") or result.startswith("無\n"):
+            return ""
+        return result
 
     def generate_summary(self, conversations_text: str, model: Optional[str] = None) -> str:
         template = SUMMARY_PROMPT_PATH.read_text(encoding="utf-8")
@@ -184,10 +198,12 @@ class LLMClient:
     ) -> str:
         """
         利用 Gemini 百萬級上下文能力，對雙方自始至終的完整歷史對話進行深度關係復盤與人物全景剖析。
+        預設採用 gemini-3.5-flash-lite 輕量穩定生成。
         """
         template = FULL_SUMMARY_PROMPT_PATH.read_text(encoding="utf-8")
         prompt = template.format(
             display_name=display_name or "對方",
             full_conversations_text=full_conversations_text
         )
-        return self._generate_with_fallback(prompt, preferred_model=model)
+        target_model = model or settings.GEMINI_FULL_SUMMARY_MODEL
+        return self._generate_with_fallback(prompt, preferred_model=target_model)

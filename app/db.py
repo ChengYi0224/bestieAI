@@ -17,7 +17,7 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
 def init_db(db_path: Optional[Path] = None) -> None:
     conn = get_connection(db_path)
     with conn:
-        # 平滑遷移：為現有 bot_state 補足 pending_selection 與 worker_status 欄位
+        # 平滑遷移：為現有 bot_state 與 contacts 補足新欄位
         try:
             conn.execute("ALTER TABLE bot_state ADD COLUMN pending_selection TEXT;")
         except sqlite3.OperationalError:
@@ -26,12 +26,17 @@ def init_db(db_path: Optional[Path] = None) -> None:
             conn.execute("ALTER TABLE bot_state ADD COLUMN worker_status TEXT;")
         except sqlite3.OperationalError:
             pass
+        try:
+            conn.execute("ALTER TABLE contacts ADD COLUMN nickname TEXT;")
+        except sqlite3.OperationalError:
+            pass
 
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS contacts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ig_account_id TEXT UNIQUE NOT NULL,
             display_name TEXT,
+            nickname TEXT,
             relationship_note TEXT,
             status TEXT DEFAULT 'tracked',
             summary_card TEXT,
@@ -338,9 +343,16 @@ def update_contact_summary(contact_id: int, new_summary: str, db_path: Optional[
     conn.close()
 
 
-def should_update_summary(contact: Dict[str, Any], threshold: int = 50, days_limit: int = 14) -> bool:
+def should_update_summary(
+    contact: Dict[str, Any],
+    threshold: Optional[int] = None,
+    days_limit: Optional[int] = None
+) -> bool:
+    thresh = threshold if threshold is not None else settings.SUMMARY_MESSAGE_THRESHOLD
+    days_lim = days_limit if days_limit is not None else settings.SUMMARY_DAYS_LIMIT
+
     new_msgs = contact.get("new_messages_since_summary") or 0
-    if new_msgs >= threshold:
+    if new_msgs >= thresh:
         return True
 
     updated_at_str = contact.get("summary_updated_at")
@@ -349,7 +361,7 @@ def should_update_summary(contact: Dict[str, Any], threshold: int = 50, days_lim
 
     try:
         updated_at = datetime.fromisoformat(updated_at_str)
-        if (datetime.utcnow() - updated_at).days >= days_limit and new_msgs > 0:
+        if (datetime.utcnow() - updated_at).days >= days_lim and new_msgs > 0:
             return True
     except Exception:
         pass
@@ -365,6 +377,33 @@ def get_all_messages(contact_id: int, db_path: Optional[Path] = None) -> List[sq
         "SELECT * FROM messages WHERE contact_id = ? ORDER BY sent_at ASC",
         (contact_id,)
     )
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+
+def set_contact_nickname(contact_id: int, nickname: Optional[str], db_path: Optional[Path] = None) -> bool:
+    """設定或清除指定對象的暱稱。"""
+    conn = get_connection(db_path)
+    clean_nick = nickname.strip() if nickname and nickname.strip() else None
+    found = False
+    with conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE contacts SET nickname = ? WHERE id = ?", (clean_nick, contact_id))
+        found = cursor.rowcount > 0
+    conn.close()
+    return found
+
+
+def get_contacts_with_nickname(db_path: Optional[Path] = None) -> List[sqlite3.Row]:
+    """取得所有有設定暱稱的聯絡人清單。"""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, ig_account_id, display_name, nickname
+        FROM contacts
+        WHERE nickname IS NOT NULL AND TRIM(nickname) != ''
+    """)
     rows = cursor.fetchall()
     conn.close()
     return rows

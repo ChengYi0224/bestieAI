@@ -1,6 +1,8 @@
 import re
 import time
+import threading
 from typing import Optional, Tuple, Any, Callable, Dict, List
+from app.config import settings
 from app.db import (
     set_active_contact,
     set_active_contact_by_id,
@@ -12,6 +14,8 @@ from app.db import (
     get_pending_selection,
     get_contact_by_id,
     get_worker_status,
+    set_contact_nickname,
+    get_contacts_with_nickname,
 )
 from app.memory import MemoryManager
 from app.llm import LLMClient
@@ -35,6 +39,9 @@ class CommandRouter:
         "• track <IG_ID>：首次追蹤對象並匯入近一個月聊天紀錄\n"
         "• track_full [IG_ID] [上限]：安全慢速全量抓取所有歷史訊息（防風控、自動去重、重建向量庫）\n"
         "• select <關鍵字>：切換目前作用中的討論對象（支援模糊搜尋與數字回覆）\n"
+        "• nickname <暱稱> [IG_ID]：為目前對象或指定帳號設定暱稱\n"
+        "• card [IG_ID/暱稱]：直接檢視已儲存的人物關係摘要卡內容\n"
+        "• me <內容>：主動讓 AI 記住關於你的生活近況、習慣或喜好\n"
         "• summarize_history [IG_ID]：以本地所有完整歷史對話（非僅近期）深度復盤關係與人物全貌\n"
         "• sync [IG_ID]：增量同步最新訊息（滿 50 則自動更新摘要卡）\n"
         "• rebuild_vectors [IG_ID]：從本地資料庫重建向量庫（embedding 失敗後修復用，不需重新爬 IG）\n"
@@ -62,44 +69,6 @@ class CommandRouter:
         active = get_active_contact(db_path=self.db_path)
         return active["ig_account_id"] if active else None
 
-    def handle_message(self, raw_text: str) -> str:
-        text = raw_text.strip()
-        parts = text.split()
-        if not parts:
-            return "收到空白訊息。"
-
-        command = parts[0].lower()
-
-        # 檢查是否為針對多重候選清單的數字回覆 (例如 "1", "2")
-        if text.isdigit():
-            pending_ids = get_pending_selection(db_path=self.db_path)
-            if pending_ids:
-                choice_idx = int(text) - 1
-                if 0 <= choice_idx < len(pending_ids):
-                    selected_id = pending_ids[choice_idx]
-                    set_active_contact_by_id(selected_id, db_path=self.db_path)
-                    target = get_contact_by_id(selected_id, db_path=self.db_path)
-                    name_str = f"（{target['display_name']}）" if target and target["display_name"] else ""
-                    return f"已確認！目前作用對象切換為：{target['ig_account_id']}{name_str}"
-                else:
-                    return f"數字超出範圍，請輸入 1 到 {len(pending_ids)} 之間的數字選擇對象。"
-
-        HELP_TEXT = (
-            "【IG AI 陪聊機器人 指令清單】\n"
-            "• track <IG_ID>：首次追蹤對象並匯入近一個月聊天紀錄\n"
-            "• track_full [IG_ID] [上限]：安全慢速全量抓取所有歷史訊息（防風控、自動去重、重建向量庫）\n"
-            "• select <關鍵字>：切換目前作用中的討論對象（支援模糊搜尋與數字回覆）\n"
-            "• summarize_history [IG_ID]：以本地所有完整歷史對話（非僅近期）深度復盤關係與人物全貌\n"
-            "• sync [IG_ID]：增量同步最新訊息（滿 50 則自動更新摘要卡）\n"
-            "• rebuild_vectors [IG_ID]：從本地資料庫重建向量庫（embedding 失敗後修復用，不需重新爬 IG）\n"
-            "• refresh_summary [IG_ID]：手動強制更新人物關係摘要卡\n"
-            "• status（或 query）：檢視目前對話對象狀態與背景爬蟲即時進度\n"
-            "• list：列出所有已追蹤對象\n"
-            "• untrack <IG_ID>：停止追蹤該對象（保留紀錄）\n"
-            "• help：查詢指令說明\n"
-            "• 直接輸入文字：與 AI 討論回覆策略（需先 select 對象）"
-        )
-
     # ==================== 指令處理器（透過裝飾器宣告註冊） ====================
 
     @command_handler("help", "h", "?", "指令")
@@ -115,7 +84,7 @@ class CommandRouter:
     @command_handler("track_full")
     def handle_track_full(self, parts: List[str], raw_text: str) -> str:
         target = None
-        max_amount = 5000
+        max_amount = settings.TRACK_FULL_DEFAULT_LIMIT
         if len(parts) >= 2:
             if parts[1].isdigit():
                 max_amount = int(parts[1])
@@ -158,6 +127,39 @@ class CommandRouter:
         lines.append("（直接回傳數字如 1 即可完成切換）")
         return "\n".join(lines)
 
+    @command_handler("nickname", "nick", "暱稱")
+    def handle_nickname(self, parts: List[str], raw_text: str) -> str:
+        if len(parts) < 2:
+            return "格式錯誤！請提供暱稱：nickname <暱稱> [IG_ID]\n（輸入 help 可查看所有指令）"
+        nick = parts[1]
+        target_account = parts[2] if len(parts) >= 3 else None
+
+        conn = get_connection(self.db_path)
+        cursor = conn.cursor()
+        if target_account:
+            cursor.execute("SELECT id, ig_account_id, display_name FROM contacts WHERE ig_account_id = ?", (target_account,))
+            target = cursor.fetchone()
+        else:
+            target = get_active_contact(db_path=self.db_path)
+        conn.close()
+
+        if not target:
+            return "尚未指定對象，請在指令後附帶帳號或先使用 select 切換對象。"
+
+        set_contact_nickname(target["id"], nick, db_path=self.db_path)
+        return f"已為 {target['ig_account_id']} 設定暱稱為「{nick}」。"
+
+    @command_handler("me", "我")
+    def handle_me(self, parts: List[str], raw_text: str) -> str:
+        if len(parts) < 2:
+            return "格式錯誤！請提供要記錄的內容：me <內容>\n（輸入 help 可查看所有指令）"
+        content = " ".join(parts[1:])
+        try:
+            self.memory_manager.add_self_memory(content)
+            return "好，我記下了。"
+        except Exception as e:
+            return f"記錄失敗: {e}"
+
     @command_handler("status", "query", "進度", "狀態")
     def handle_status(self, parts: List[str], raw_text: str) -> str:
         w_status = get_worker_status(db_path=self.db_path)
@@ -181,10 +183,11 @@ class CommandRouter:
                 return f"{worker_section}尚未選定作用對象，請使用 select <關鍵字> 切換。"
             return "尚未選定作用對象，請使用 select <IG_ID> 切換。"
 
+        nick_str = f" [暱稱: {contact['nickname']}]" if ("nickname" in contact.keys() and contact["nickname"]) else ""
         return (
             f"{worker_section}"
             f"【目前對象】\n"
-            f"帳號: {contact['ig_account_id']} ({contact['display_name'] or '未設定'})\n"
+            f"帳號: {contact['ig_account_id']} ({contact['display_name'] or '未設定'}){nick_str}\n"
             f"狀態: {contact['status']}\n"
             f"上次同步: {contact['last_synced_at'] or '無'}\n"
             f"摘要更新: {contact['summary_updated_at'] or '無'}\n"
@@ -195,15 +198,55 @@ class CommandRouter:
     def handle_list(self, parts: List[str], raw_text: str) -> str:
         conn = get_connection(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("SELECT ig_account_id, display_name, status, last_synced_at FROM contacts")
+        cursor.execute("SELECT ig_account_id, display_name, nickname, status, last_synced_at FROM contacts")
         rows = cursor.fetchall()
         conn.close()
         if not rows:
             return "目前尚未追蹤任何對象，請使用 track <IG_ID> 開始追蹤。\n（輸入 help 可查看所有指令）"
         lines = ["【已追蹤對象清單】"]
         for r in rows:
-            lines.append(f"- {r['ig_account_id']} ({r['display_name']}) [{r['status']}]")
+            nick_str = f" [暱稱: {r['nickname']}]" if ("nickname" in r.keys() and r["nickname"]) else ""
+            lines.append(f"- {r['ig_account_id']} ({r['display_name']}){nick_str} [{r['status']}]")
         return "\n".join(lines)
+
+    @command_handler("card", "summary", "摘要", "摘要卡")
+    def handle_card(self, parts: List[str], raw_text: str) -> str:
+        target_account = parts[1] if len(parts) >= 2 else None
+
+        conn = get_connection(self.db_path)
+        cursor = conn.cursor()
+        if target_account:
+            cursor.execute("""
+                SELECT * FROM contacts
+                WHERE LOWER(ig_account_id) = LOWER(?) OR LOWER(display_name) = LOWER(?) OR LOWER(nickname) = LOWER(?)
+            """, (target_account, target_account, target_account))
+            contact = cursor.fetchone()
+        else:
+            contact = get_active_contact(db_path=self.db_path)
+        conn.close()
+
+        if not contact:
+            if target_account:
+                return f"找不到符合「{target_account}」的對象，請確認帳號或暱稱是否正確。"
+            return "尚未選定作用對象，請使用 card <IG_ID> 或先使用 select 切換對象。"
+
+        summary = contact["summary_card"]
+        updated_at = contact["summary_updated_at"] or "尚未更新過"
+        nick_str = f" [暱稱: {contact['nickname']}]" if ("nickname" in contact.keys() and contact["nickname"]) else ""
+        name_str = f"（{contact['display_name']}）" if contact["display_name"] else ""
+
+        if not summary or summary.strip() == "尚未建立摘要卡":
+            return (
+                f"【{contact['ig_account_id']}{name_str}{nick_str} 摘要卡】\n"
+                f"目前尚未建立摘要卡。\n"
+                f"可使用 summarize_history 或 refresh_summary 指令立即生成。"
+            )
+
+        return (
+            f"【{contact['ig_account_id']}{name_str}{nick_str} 人物關係摘要卡】\n"
+            f"（上次更新時間：{updated_at}）\n\n"
+            f"{summary.strip()}"
+        )
 
     @command_handler("refresh_summary")
     def handle_refresh_summary(self, parts: List[str], raw_text: str) -> str:
@@ -277,12 +320,32 @@ class CommandRouter:
         return self._handle_chat_mode(text)
 
     def _handle_chat_mode(self, user_text: str) -> str:
-        contact, summary_card, rag_chunks, recent_context, chat_history = self.memory_manager.get_full_context(user_text)
+        contact, summary_card, rag_chunks, recent_context, chat_history, self_context = self.memory_manager.get_full_context(user_text)
         if not contact:
             return "目前尚未選擇討論對象！請先傳送指令：select <IG_ID> 切換對象。"
 
         contact_id = contact["id"]
         add_bot_conversation(role="user", content=user_text, contact_id=contact_id)
+
+        # 暱稱掃描：若提及其他已設定暱稱的朋友，進行跨對象 RAG 查詢
+        cross_rag_list = []
+        try:
+            contacts_with_nick = get_contacts_with_nickname(db_path=self.db_path)
+            for c in contacts_with_nick:
+                nick = c["nickname"]
+                if nick and (nick.lower() in user_text.lower()) and c["id"] != contact_id:
+                    nick_results = self.memory_manager.vector_store.query(
+                        contact_id=c["id"],
+                        query_text=user_text,
+                        n_results=settings.CROSS_RAG_RESULTS
+                    )
+                    if nick_results:
+                        snippets = "\n".join([r["text"] for r in nick_results])
+                        cross_rag_list.append(f"【關於 {nick} ({c['ig_account_id']}) 的紀錄】\n{snippets}")
+        except Exception:
+            pass
+
+        cross_rag_str = "\n\n---\n\n".join(cross_rag_list) if cross_rag_list else ""
 
         reply = self.llm_client.generate_reply(
             display_name=contact["display_name"] or contact["ig_account_id"],
@@ -290,8 +353,22 @@ class CommandRouter:
             rag_chunks=rag_chunks,
             recent_context=recent_context,
             chat_history=chat_history,
+            self_context=self_context,
+            cross_rag=cross_rag_str,
             user_query=user_text
         )
 
         add_bot_conversation(role="assistant", content=reply, contact_id=contact_id)
+
+        # 背景非同步萃取使用者自身相關資訊並寫入記憶
+        def _async_extract():
+            try:
+                extracted = self.llm_client.extract_self_info(user_text)
+                if extracted:
+                    self.memory_manager.add_self_memory(extracted)
+            except Exception:
+                pass
+
+        threading.Thread(target=_async_extract, daemon=True).start()
+
         return reply
