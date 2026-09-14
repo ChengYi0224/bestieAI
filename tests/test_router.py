@@ -44,12 +44,31 @@ def test_router_commands(router, tmp_path):
     # 測試 help 指令
     help_res = router.handle_message("help")
     assert "【IG AI 陪聊機器人 指令清單】" in help_res
-    assert "track" in help_res
+    assert "track (t)" in help_res
 
     # 測試錯誤用法帶有 help 提示
     err_res = router.handle_message("track")
     assert "格式錯誤" in err_res
     assert "help" in err_res
+
+
+def test_router_short_aliases(router):
+    """驗證所有指令短 alias 正確分發。"""
+    assert router.handle_message("t bob_123") == "TRACK_REQUEST:bob_123"
+    assert router.handle_message("tf bob_123 500") == "TRACK_FULL_REQUEST:bob_123:500"
+    assert router.handle_message("sy bob_123") == "SYNC_REQUEST:bob_123"
+    assert router.handle_message("sh bob_123") == "SUMMARIZE_HISTORY_REQUEST:bob_123"
+    assert router.handle_message("sum bob_123") == "SUMMARIZE_HISTORY_REQUEST:bob_123"
+    assert router.handle_message("rs bob_123") == "REFRESH_SUMMARY_REQUEST:bob_123"
+    assert router.handle_message("ref bob_123") == "REFRESH_SUMMARY_REQUEST:bob_123"
+    assert router.handle_message("rv bob_123") == "REBUILD_VECTORS_REQUEST:bob_123"
+    assert router.handle_message("rb bob_123") == "REBUILD_VECTORS_REQUEST:bob_123"
+    assert router.handle_message("ut bob_123") == "已將 bob_123 標記為停止追蹤。"
+    assert "尚未選定" in router.handle_message("st") or "目前對話對象狀態" in router.handle_message("st")
+    assert "尚未追蹤" in router.handle_message("ls") or "已追蹤" in router.handle_message("ls")
+    assert "尚未追蹤" in router.handle_message("l") or "已追蹤" in router.handle_message("l")
+    assert "【IG AI 陪聊機器人 指令清單】" in router.handle_message("h")
+    assert "【IG AI 陪聊機器人 指令清單 - 全量模式】" in router.handle_message("h all")
 
 
 def test_select_fuzzy_matching(tmp_path):

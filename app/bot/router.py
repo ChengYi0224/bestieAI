@@ -48,34 +48,33 @@ class CommandRouter:
         if not show_all:
             return (
                 "【IG AI 陪聊機器人 指令清單】\n"
-                "• track <IG_ID>：首次追蹤對象並匯入近況\n"
-                "• select <關鍵字>：切換目前討論對象\n"
-                "• card [IG_ID]：檢視目前對象的日常摘要卡\n"
-                "• card full [IG_ID]：檢視完整全景深度復盤長文\n"
-                "• me <內容>：讓 AI 記住你的喜好與生活近況\n"
-                "• status：檢視目前對象與背景進度\n"
+                "• track (t) <IG_ID>：首次追蹤對象並匯入近況\n"
+                "• select (s) <關鍵字>：切換目前討論對象\n"
+                "• card (c) [IG_ID]：檢視日常摘要卡（加 full 查長文）\n"
+                "• me (m) <內容>：讓 AI 記住你的喜好與生活近況\n"
+                "• status (st/q)：檢視目前對象與背景進度\n"
                 "• 直接傳送訊息：與 AI 討論相處回覆策略\n\n"
-                "💡 輸入「help all」可查看全量進階指令（全量抓取、同步、重建等）。"
+                "💡 輸入「help all」(或 h all) 可查看全量進階指令（同步、全量抓取、重建等）。"
             )
         return (
             "【IG AI 陪聊機器人 指令清單 - 全量模式】\n"
             "--- 常用對話與設定 ---\n"
-            "• track <IG_ID>：首次追蹤對象並匯入近期對話\n"
-            "• select <關鍵字>：切換目前作用中的討論對象\n"
-            "• nickname <暱稱> [IG_ID]：為對象設定專屬暱稱\n"
-            "• card [IG_ID]：檢視日常輕量人物關係摘要卡\n"
-            "• card full [IG_ID]：檢視 7 大章節全景深度復盤長文\n"
-            "• me <內容>：記錄關於你的生活近況或偏好\n"
-            "• list：列出所有已追蹤對象名單\n"
-            "• status：檢視目前選定對象與背景爬蟲進度\n\n"
+            "• track (t) <IG_ID>：首次追蹤對象並匯入近期對話\n"
+            "• select (s) <關鍵字>：切換目前作用中的討論對象\n"
+            "• nickname (n/nick) <暱稱> [IG_ID]：為對象設定專屬暱稱\n"
+            "• card (c) [IG_ID]：檢視日常輕量人物關係摘要卡\n"
+            "• card full (c full) [IG_ID]：檢視 7 大章節全景深度復盤長文\n"
+            "• me (m) <內容>：記錄關於你的生活近況或偏好\n"
+            "• list (ls/l)：列出所有已追蹤對象名單\n"
+            "• status (st/q)：檢視目前選定對象與背景爬蟲進度\n\n"
             "--- 深度復盤與維護 ---\n"
-            "• summarize_history [IG_ID]：以所有完整歷史對話進行深度全景復盤\n"
-            "• sync [IG_ID]：增量同步最新訊息\n"
-            f"• track_full [IG_ID] [上限]：慢速防風控全量抓取（預設上限 {settings.TRACK_FULL_DEFAULT_LIMIT} 則）\n"
-            "• rebuild_vectors [IG_ID]：從本地 SQLite 重建事件向量庫\n"
-            "• refresh_summary [IG_ID]：強制更新日常人物摘要卡\n"
-            "• untrack <IG_ID>：停止追蹤該對象\n"
-            "• help：返回精簡核心指令"
+            "• summarize_history (sh/sum) [IG_ID]：以所有完整歷史對話進行深度全景復盤\n"
+            "• sync (sy) [IG_ID]：增量同步最新訊息\n"
+            f"• track_full (tf) [IG_ID] [上限]：慢速防風控全量抓取（預設上限 {settings.TRACK_FULL_DEFAULT_LIMIT} 則）\n"
+            "• rebuild_vectors (rv/rb) [IG_ID]：從本地 SQLite 重建事件向量庫\n"
+            "• refresh_summary (rs/ref) [IG_ID]：強制更新日常人物摘要卡\n"
+            "• untrack (ut) <IG_ID>：停止追蹤該對象\n"
+            "• help (h/?)：返回精簡核心指令"
         )
 
     @property
@@ -105,13 +104,13 @@ class CommandRouter:
         show_all = len(parts) >= 2 and parts[1].lower() in ("all", "full", "全部", "詳細")
         return self.get_help_text(show_all=show_all)
 
-    @command_handler("track")
+    @command_handler("track", "t")
     def handle_track(self, parts: List[str], raw_text: str) -> str:
         if len(parts) < 2:
             return "格式錯誤！請提供要追蹤的帳號：track <IG_ID>\n（輸入 help 可查看常用指令）"
         return f"TRACK_REQUEST:{parts[1]}"
 
-    @command_handler("track_full")
+    @command_handler("track_full", "tf")
     def handle_track_full(self, parts: List[str], raw_text: str) -> str:
         target = None
         max_amount = settings.TRACK_FULL_DEFAULT_LIMIT
@@ -131,7 +130,7 @@ class CommandRouter:
 
         return f"TRACK_FULL_REQUEST:{target}:{max_amount}"
 
-    @command_handler("select")
+    @command_handler("select", "s")
     def handle_select(self, parts: List[str], raw_text: str) -> str:
         if len(parts) < 2:
             return "格式錯誤！請提供要切換的帳號或名稱關鍵字：select <關鍵字>"
@@ -157,7 +156,7 @@ class CommandRouter:
         lines.append("（直接回傳數字如 1 即可完成切換）")
         return "\n".join(lines)
 
-    @command_handler("nickname", "nick", "暱稱")
+    @command_handler("nickname", "nick", "n", "暱稱")
     def handle_nickname(self, parts: List[str], raw_text: str) -> str:
         if len(parts) < 2:
             return "格式錯誤！請提供暱稱：nickname <暱稱> [IG_ID]"
@@ -179,7 +178,7 @@ class CommandRouter:
         set_contact_nickname(target["id"], nick, db_path=self.db_path)
         return f"已為 {target['ig_account_id']} 設定暱稱為「{nick}」。"
 
-    @command_handler("me", "我")
+    @command_handler("me", "m", "我")
     def handle_me(self, parts: List[str], raw_text: str) -> str:
         if len(parts) < 2:
             return "格式錯誤！請提供要記錄的內容：me <內容>"
@@ -190,7 +189,7 @@ class CommandRouter:
         except Exception as e:
             return f"記錄失敗: {e}"
 
-    @command_handler("status", "query", "進度", "狀態")
+    @command_handler("status", "query", "st", "q", "進度", "狀態")
     def handle_status(self, parts: List[str], raw_text: str) -> str:
         w_status = get_worker_status(db_path=self.db_path)
         worker_section = ""
@@ -224,7 +223,7 @@ class CommandRouter:
             f"累積未摘要: {contact['new_messages_since_summary']} 則"
         )
 
-    @command_handler("list")
+    @command_handler("list", "ls", "l")
     def handle_list(self, parts: List[str], raw_text: str) -> str:
         conn = get_connection(self.db_path)
         cursor = conn.cursor()
@@ -239,7 +238,7 @@ class CommandRouter:
             lines.append(f"- {r['ig_account_id']} ({r['display_name']}){nick_str} [{r['status']}]")
         return "\n".join(lines)
 
-    @command_handler("card", "summary", "摘要", "摘要卡")
+    @command_handler("card", "summary", "c", "摘要", "摘要卡")
     def handle_card(self, parts: List[str], raw_text: str) -> str:
         # 解析是否要求全景長文模式 (card full 或 card -f)
         is_full_request = False
@@ -307,28 +306,28 @@ class CommandRouter:
             f"💡 輸入「card full」可查閱 7 大章節全景長篇復盤。"
         )
 
-    @command_handler("refresh_summary")
+    @command_handler("refresh_summary", "rs", "ref")
     def handle_refresh_summary(self, parts: List[str], raw_text: str) -> str:
         target = self._resolve_target(parts)
         if not target:
             return "請指定對象：refresh_summary <IG_ID>，或先使用 select 切換對象。"
         return f"REFRESH_SUMMARY_REQUEST:{target}"
 
-    @command_handler("summarize_history")
+    @command_handler("summarize_history", "sh", "sum")
     def handle_summarize_history(self, parts: List[str], raw_text: str) -> str:
         target = self._resolve_target(parts)
         if not target:
             return "請指定對象：summarize_history <IG_ID>，或先使用 select 切換對象。"
         return f"SUMMARIZE_HISTORY_REQUEST:{target}"
 
-    @command_handler("sync")
+    @command_handler("sync", "sy")
     def handle_sync(self, parts: List[str], raw_text: str) -> str:
         target = self._resolve_target(parts)
         if not target:
             return "請指定要同步的對象：sync <IG_ID>，或先使用 select 切換對象。"
         return f"SYNC_REQUEST:{target}"
 
-    @command_handler("untrack")
+    @command_handler("untrack", "ut")
     def handle_untrack(self, parts: List[str], raw_text: str) -> str:
         if len(parts) < 2:
             return "格式錯誤！請指定對象：untrack <IG_ID>"
@@ -339,7 +338,7 @@ class CommandRouter:
         conn.close()
         return f"已將 {target} 標記為停止追蹤。"
 
-    @command_handler("rebuild_vectors")
+    @command_handler("rebuild_vectors", "rv", "rb")
     def handle_rebuild_vectors(self, parts: List[str], raw_text: str) -> str:
         target = self._resolve_target(parts)
         if not target:
