@@ -34,24 +34,30 @@ def command_handler(*names: str):
 
 
 class CommandRouter:
-    HELP_TEXT = (
-        "【IG AI 陪聊機器人 指令清單】\n"
-        "• track <IG_ID>：首次追蹤對象並匯入近一個月聊天紀錄\n"
-        "• track_full [IG_ID] [上限]：安全慢速全量抓取所有歷史訊息（防風控、自動去重、重建向量庫）\n"
-        "• select <關鍵字>：切換目前作用中的討論對象（支援模糊搜尋與數字回覆）\n"
-        "• nickname <暱稱> [IG_ID]：為目前對象或指定帳號設定暱稱\n"
-        "• card [IG_ID/暱稱]：直接檢視已儲存的人物關係摘要卡內容\n"
-        "• me <內容>：主動讓 AI 記住關於你的生活近況、習慣或喜好\n"
-        "• summarize_history [IG_ID]：以本地所有完整歷史對話（非僅近期）深度復盤關係與人物全貌\n"
-        "• sync [IG_ID]：增量同步最新訊息（滿 50 則自動更新摘要卡）\n"
-        "• rebuild_vectors [IG_ID]：從本地資料庫重建向量庫（embedding 失敗後修復用，不需重新爬 IG）\n"
-        "• refresh_summary [IG_ID]：手動強制更新人物關係摘要卡\n"
-        "• status（或 query）：檢視目前對話對象狀態與背景爬蟲即時進度\n"
-        "• list：列出所有已追蹤對象\n"
-        "• untrack <IG_ID>：停止追蹤該對象（保留紀錄）\n"
-        "• help：查詢指令說明\n"
-        "• 直接輸入文字：與 AI 討論回覆策略（需先 select 對象）"
-    )
+    @classmethod
+    def get_help_text(cls) -> str:
+        return (
+            "【IG AI 陪聊機器人 指令清單】\n"
+            "• track <IG_ID>：首次追蹤對象並匯入近一個月聊天紀錄\n"
+            f"• track_full [IG_ID] [上限]：安全慢速抓取歷史訊息（預設最多 {settings.TRACK_FULL_DEFAULT_LIMIT} 則；防風控、自動去重、重建向量庫）\n"
+            "• select <關鍵字>：切換目前作用中的討論對象（支援模糊搜尋與數字回覆）\n"
+            "• nickname <暱稱> [IG_ID]：為目前對象或指定帳號設定暱稱\n"
+            "• card [IG_ID/暱稱]：直接檢視已儲存的人物關係摘要卡內容\n"
+            "• me <內容>：主動讓 AI 記住關於你的生活近況、習慣或喜好\n"
+            "• summarize_history [IG_ID]：以本地所有完整歷史對話（非僅近期）深度復盤關係與人物全貌\n"
+            "• sync [IG_ID]：增量同步最新訊息（滿 50 則自動更新摘要卡）\n"
+            "• rebuild_vectors [IG_ID]：從本地資料庫重建向量庫（embedding 失敗後修復用，不需重新爬 IG）\n"
+            "• refresh_summary [IG_ID]：手動強制更新人物關係摘要卡\n"
+            "• status（或 query）：檢視目前對話對象狀態與背景爬蟲即時進度\n"
+            "• list：列出所有已追蹤對象\n"
+            "• untrack <IG_ID>：停止追蹤該對象（保留紀錄）\n"
+            "• help：查詢指令說明\n"
+            "• 直接輸入文字：與 AI 討論回覆策略（需先 select 對象）"
+        )
+
+    @property
+    def HELP_TEXT(self) -> str:
+        return self.get_help_text()
 
     def __init__(
         self,
@@ -73,7 +79,7 @@ class CommandRouter:
 
     @command_handler("help", "h", "?", "指令")
     def handle_help(self, parts: List[str], raw_text: str) -> str:
-        return self.HELP_TEXT
+        return self.get_help_text()
 
     @command_handler("track")
     def handle_track(self, parts: List[str], raw_text: str) -> str:
