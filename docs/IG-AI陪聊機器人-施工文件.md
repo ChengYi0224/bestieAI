@@ -411,18 +411,22 @@ bestieAI/
 │   ├── bot/                   # 機器人交互層
 │   │   ├── router.py          # 宣告式指令路由（@command_handler）、分組 Help、card full
 │   │   └── poller.py          # MQTT 即時推播監聽與背景隊列 Worker
-│   └── prompts/               # 提示詞範本
-│       ├── system.txt         # 閨蜜陪伴核心人設 Prompt
-│       ├── summary.txt        # 日常輕量關係摘要卡範本（限制 300-500 字）
-│       ├── full_summary.txt   # 全景歷史深度復盤長文範本（7 大章節）
-│       ├── extract_self.txt   # 使用者自身事實萃取範本
-│       └── extract_events.txt # 批次對話提煉為客觀時間事件條目範本
+│   └── prompts/               # 提示詞範本目錄（依職責分類）
+│       ├── chat/
+│       │   └── companion.txt  # 即時閨蜜陪聊核心 Prompt
+│       ├── events/
+│       │   ├── extract.txt    # 微觀事實事件提煉範本
+│       │   ├── extract_self.txt # 使用者自身事實萃取範本
+│       │   └── consolidate_batch.txt # 多群組批次無損融合
+│       └── summary/
+│           ├── concise.txt    # 日常輕量關係摘要卡範本（300-500字）
+│           ├── full.txt       # 全景歷史深度復盤長文範本（7 大章節）
+│           └── summary.txt    # 舊版全篇人物摘要卡（相容備援）
 ├── data/                      # 本地持久化資料（.gitignore）
 │   ├── app.db                 # SQLite 資料庫（原始對話、聯絡人、摘要）
 │   ├── chroma/                # ChromaDB 向量資料庫（事件記憶與自我記憶）
 │   └── sessions/              # 加密 session（main_account.json, bot_account.json）
-├── tests/                     # 單元與整合測試套件（51 項測試全數通過）
-├── tools/                     # 維護與偵錯輔助腳本（如 preview_pipeline.py）
+├── tests/                     # 單元與整合測試套件（57 項測試全數通過）
 ├── docs/                      # 架構與施工文件
 ├── main.py                    # 系統進入點
 ├── pyproject.toml             # uv 依賴設定檔

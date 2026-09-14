@@ -25,15 +25,15 @@ from app.core.rate_limit import gemini_retry, _is_gemini_retryable_error
 logger = logging.getLogger("bestieAI.llm_service")
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
-SYSTEM_PROMPT_PATH = PROMPTS_DIR / "system.txt"
-SUMMARY_PROMPT_PATH = PROMPTS_DIR / "summary.txt"
-FULL_SUMMARY_PROMPT_PATH = PROMPTS_DIR / "full_summary.txt"
-EXTRACT_SELF_PROMPT_PATH = PROMPTS_DIR / "extract_self.txt"
-EXTRACT_EVENTS_PROMPT_PATH = PROMPTS_DIR / "extract_events.txt"
-CONSOLIDATE_EVENTS_PROMPT_PATH = PROMPTS_DIR / "consolidate_events.txt"
-CONSOLIDATE_CLUSTERS_BATCH_PROMPT_PATH = PROMPTS_DIR / "consolidate_clusters_batch.txt"
-CONCISE_SUMMARY_PROMPT_PATH = PROMPTS_DIR / "concise_summary.txt"
-PROMPT_TEMPLATE_PATH = SYSTEM_PROMPT_PATH
+COMPANION_PROMPT_PATH = PROMPTS_DIR / "chat" / "companion.txt"
+SYSTEM_PROMPT_PATH = COMPANION_PROMPT_PATH
+SUMMARY_PROMPT_PATH = PROMPTS_DIR / "summary" / "summary.txt"
+FULL_SUMMARY_PROMPT_PATH = PROMPTS_DIR / "summary" / "full.txt"
+CONCISE_SUMMARY_PROMPT_PATH = PROMPTS_DIR / "summary" / "concise.txt"
+EXTRACT_SELF_PROMPT_PATH = PROMPTS_DIR / "events" / "extract_self.txt"
+EXTRACT_EVENTS_PROMPT_PATH = PROMPTS_DIR / "events" / "extract.txt"
+CONSOLIDATE_CLUSTERS_BATCH_PROMPT_PATH = PROMPTS_DIR / "events" / "consolidate_batch.txt"
+PROMPT_TEMPLATE_PATH = COMPANION_PROMPT_PATH
 
 # 依優先順序嘗試的模型陣列
 CANDIDATE_MODELS: List[str] = [
@@ -240,35 +240,15 @@ class LLMClient:
     def consolidate_events(self, cluster_events: List[str], model: Optional[str] = None) -> List[str]:
         """
         將一組時序相近且語意高度相似的事件候選群進行「同質無損融合」或「異質各自保留」。
-        若輸入為空或只有 1 則，直接原樣回傳。
+        底層直接複用批次融合方法，避免維護重複的單一 Prompt。
         """
         if not cluster_events:
             return []
         if len(cluster_events) == 1:
             return cluster_events
 
-        template = CONSOLIDATE_EVENTS_PROMPT_PATH.read_text(encoding="utf-8")
-        cluster_text = "\n".join(f"- {ev}" for ev in cluster_events)
-        prompt = template.format(cluster_events_text=cluster_text)
-        candidates = getattr(settings, "event_extraction_models_list", None)
-        raw_output = self._generate_with_fallback(prompt, preferred_model=model, candidate_models=candidates).strip()
-
-        if not raw_output:
-            return cluster_events
-
-        consolidated = []
-        for line in raw_output.split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            if line.startswith(("- ", "• ", "* ")):
-                line = line[2:].strip()
-            elif line.startswith(("1.", "2.", "3.", "4.", "5.")):
-                line = line[2:].strip()
-            if line:
-                consolidated.append(line)
-
-        return consolidated if consolidated else cluster_events
+        res = self.consolidate_clusters_batch({"single": cluster_events}, model=model)
+        return res.get("single", cluster_events)
 
     def consolidate_clusters_batch(
         self,

@@ -2,7 +2,7 @@
 extraction.py — 事件提煉與時間滑動窗口管線（Temporal Event Extraction Pipeline）。
 職責：
 1. 依據自然靜默（6 小時）與目標容量（400 則 + 12 Overlap）進行對話時間感知滑動切塊。
-2. 自行讀取 extract_events.txt 提示詞並組裝對話內容。
+2. 自行讀取 events/extract.txt 提示詞並組裝對話內容。
 3. 呼叫 GeminiClient 執行微觀事件提煉（按客觀事實密度記錄，無條數限制）。
 4. 每提煉完成一批次，立即增量寫入本地 SQLite 快取（status='raw'），阻斷中斷資料損失。
 """
@@ -17,7 +17,7 @@ from app.clients.gemini import GeminiClient
 from app.storage.db import save_contact_events
 
 logger = logging.getLogger("bestieAI.pipelines.extraction")
-PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "extract_events.txt"
+PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "events" / "extract.txt"
 
 
 def parse_time_str(time_str: Optional[str]) -> Optional[datetime]:

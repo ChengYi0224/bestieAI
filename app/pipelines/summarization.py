@@ -23,10 +23,10 @@ from app.storage.db import (
 
 logger = logging.getLogger("bestieAI.pipelines.summarization")
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
-CONCISE_SUMMARY_PROMPT_PATH = PROMPTS_DIR / "concise_summary.txt"
-SUMMARY_PROMPT_PATH = PROMPTS_DIR / "summary.txt"
-FULL_SUMMARY_PROMPT_PATH = PROMPTS_DIR / "full_summary.txt"
-EXTRACT_SELF_PROMPT_PATH = PROMPTS_DIR / "extract_self.txt"
+CONCISE_SUMMARY_PROMPT_PATH = PROMPTS_DIR / "summary" / "concise.txt"
+SUMMARY_PROMPT_PATH = PROMPTS_DIR / "summary" / "summary.txt"
+FULL_SUMMARY_PROMPT_PATH = PROMPTS_DIR / "summary" / "full.txt"
+EXTRACT_SELF_PROMPT_PATH = PROMPTS_DIR / "events" / "extract_self.txt"
 
 
 class Summarizer:

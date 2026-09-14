@@ -1,7 +1,7 @@
 """
 consolidation.py — 同質無損融合管線（Lossless Cluster Consolidation Pipeline）。
 職責：
-1. 自行讀取 consolidate_clusters_batch.txt 提示詞範本並組裝 XML Payload。
+1. 自行讀取 events/consolidate_batch.txt 提示詞範本並組裝 XML Payload。
 2. 支援一次打包最多 20 個獨立 Cluster 進行批次融合，大幅節省 90% 以上 RPD。
 3. 孤立事件（單條）直接保留，0 外部請求。
 4. 呼叫 GeminiClient 執行純文字生成，並以正則安全解析各群組結果。
@@ -16,7 +16,7 @@ from app.core.config import settings
 from app.clients.gemini import GeminiClient
 
 logger = logging.getLogger("bestieAI.pipelines.consolidation")
-PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "consolidate_clusters_batch.txt"
+PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "events" / "consolidate_batch.txt"
 
 
 class EventConsolidator:
