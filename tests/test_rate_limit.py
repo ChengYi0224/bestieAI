@@ -122,3 +122,15 @@ def test_is_gemini_retryable_error_ignores_client_errors():
     assert _is_gemini_retryable_error(ClientError(400, {})) is False
     assert _is_gemini_retryable_error(ClientError(404, {})) is False
     assert _is_gemini_retryable_error(ValueError("nope")) is False
+
+
+def test_calculate_human_delay_high_variance():
+    import statistics
+    from app.rate_limit import calculate_human_delay
+
+    samples = [calculate_human_delay(min_delay=3.5, max_delay=14.0, pause_chance=0.2, pause_min=20.0, pause_max=40.0) for _ in range(100)]
+    stdev = statistics.stdev(samples)
+    # 驗證標準差顯著大於舊版的 1~2 秒區間
+    assert stdev > 3.0
+    # 驗證樣本中有包含微停頓（大於 18 秒）
+    assert any(s >= 18.0 for s in samples)

@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     MAIN_ACCOUNT_USERNAME: str = ""
     MAIN_ACCOUNT_PASSWORD: str = ""
+    MAIN_ACCOUNT_USER_ID: str = ""
     BOT_ACCOUNT_USERNAME: str = ""
     BOT_ACCOUNT_PASSWORD: str = ""
     SESSION_ENCRYPTION_KEY: str = ""
@@ -18,6 +19,7 @@ class Settings(BaseSettings):
     SESSION_DIR: Path = Field(default=Path("./data/sessions"))
     LOG_DIR: Path = Field(default=Path("./logs"))
     LLM_LOG_PATH: Path = Field(default=Path("./logs/llm.log"))
+    ENABLE_LLM_LOG: bool = Field(default=True)
     POLL_INTERVAL_SECONDS: int = Field(default=15)
 
     # 模型設定（可透過 .env 覆寫）

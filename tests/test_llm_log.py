@@ -66,3 +66,20 @@ def test_llm_client_logs_during_call(tmp_path):
     assert "他問我晚上吃什麼" in content
     assert "[OUTPUT]" in content
     assert "這是由 Mock 生成的回覆" in content
+
+
+def test_llm_log_disabled(tmp_path, monkeypatch):
+    from app.config import settings
+
+    log_file = tmp_path / "disabled_llm.log"
+    monkeypatch.setattr(settings, "ENABLE_LLM_LOG", False)
+
+    log_llm_call(
+        model="gemini-3.8-flash",
+        prompt="這則日誌不應該被寫入",
+        output="這則也不該寫入",
+        duration_sec=0.1,
+        log_path=log_file
+    )
+
+    assert not log_file.exists()

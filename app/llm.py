@@ -9,7 +9,11 @@ from app.rate_limit import gemini_retry, _is_gemini_retryable_error
 
 logger = logging.getLogger("bestieAI.llm")
 
-PROMPT_TEMPLATE_PATH = Path(__file__).parent / "prompts" / "system.txt"
+PROMPTS_DIR = Path(__file__).parent / "prompts"
+SYSTEM_PROMPT_PATH = PROMPTS_DIR / "system.txt"
+SUMMARY_PROMPT_PATH = PROMPTS_DIR / "summary.txt"
+FULL_SUMMARY_PROMPT_PATH = PROMPTS_DIR / "full_summary.txt"
+PROMPT_TEMPLATE_PATH = SYSTEM_PROMPT_PATH  # 相容舊常數名稱
 
 # 依優先順序嘗試的模型陣列
 CANDIDATE_MODELS: List[str] = [
@@ -49,7 +53,9 @@ def log_llm_call(
     duration_sec: float = 0.0,
     log_path: Optional[Path] = None
 ) -> None:
-    """將每次 LLM 的 input 與 output / error 結構化記錄到 llm.log"""
+    """將每次 LLM 的 input 與 output / error 結構化記錄到 llm.log（受 settings.ENABLE_LLM_LOG 控制）"""
+    if not settings.ENABLE_LLM_LOG:
+        return
     try:
         recorder = get_llm_recorder(log_path)
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -78,6 +84,22 @@ def log_llm_call(
         logger.error(f"寫入 llm.log 失敗: {e}")
 
 
+def log_llm_execution(func):
+    """Decorator：自動計算耗時並在執行成功或拋出異常時寫入 llm.log。"""
+    import functools
+    @functools.wraps(func)
+    def wrapper(self, model: str, prompt: str, *args, **kwargs):
+        start_t = time.time()
+        try:
+            output = func(self, model, prompt, *args, **kwargs)
+            log_llm_call(model=model, prompt=prompt, output=output, duration_sec=time.time() - start_t, log_path=self.log_path)
+            return output
+        except Exception as e:
+            log_llm_call(model=model, prompt=prompt, error=e, duration_sec=time.time() - start_t, log_path=self.log_path)
+            raise
+    return wrapper
+
+
 class LLMClient:
     def __init__(
         self,
@@ -99,33 +121,13 @@ class LLMClient:
         return self._client
 
     @gemini_retry(max_short_retries=2, base_delay=1.5)
+    @log_llm_execution
     def _call_model(self, model: str, prompt: str) -> str:
-        start_t = time.time()
-        try:
-            response = self.client.models.generate_content(
-                model=model,
-                contents=prompt
-            )
-            output_text = response.text
-            duration = time.time() - start_t
-            log_llm_call(
-                model=model,
-                prompt=prompt,
-                output=output_text,
-                duration_sec=duration,
-                log_path=self.log_path
-            )
-            return output_text
-        except Exception as e:
-            duration = time.time() - start_t
-            log_llm_call(
-                model=model,
-                prompt=prompt,
-                error=e,
-                duration_sec=duration,
-                log_path=self.log_path
-            )
-            raise
+        response = self.client.models.generate_content(
+            model=model,
+            contents=prompt
+        )
+        return response.text
 
     def _generate_with_fallback(self, prompt: str, preferred_model: Optional[str] = None) -> str:
         """
@@ -170,16 +172,8 @@ class LLMClient:
         return self._generate_with_fallback(prompt, preferred_model=model)
 
     def generate_summary(self, conversations_text: str, model: Optional[str] = None) -> str:
-        prompt = (
-            "你是一位細心且深刻洞察人際關係的分析助理。請分析以下這段對話歷史，"
-            "萃取並整理出一份精簡的「人物關係摘要卡」：\n\n"
-            "包含：\n"
-            "1. 人物個性與特質\n"
-            "2. 兩人的主要互動模式與聊天頻率風格\n"
-            "3. 提及的重要事件、回憶或關鍵話題\n"
-            "4. 目前關係的可能狀態或潛在張力\n\n"
-            f"對話歷史：\n{conversations_text}"
-        )
+        template = SUMMARY_PROMPT_PATH.read_text(encoding="utf-8")
+        prompt = template.format(conversations_text=conversations_text)
         return self._generate_with_fallback(prompt, preferred_model=model)
 
     def generate_full_history_summary(
@@ -191,26 +185,9 @@ class LLMClient:
         """
         利用 Gemini 百萬級上下文能力，對雙方自始至終的完整歷史對話進行深度關係復盤與人物全景剖析。
         """
-        prompt = (
-            f"你是一位細膩、洞察深刻且具備心理分析專業的好朋友兼人際顧問。"
-            f"請通讀使用者與「{display_name}」自始至終的完整歷史對話紀錄，"
-            f"為使用者整理出一份客觀、深刻且極具參考價值的「完整人物關係全景復盤卡」：\n\n"
-            f"請包含以下核心維度：\n"
-            f"1. 【人物畫像與行為特質】：\n"
-            f"   - {display_name} 的個性、情感需求、防衛機制（如逃避、忽冷忽熱、需索認同等）。\n"
-            f"   - 他在對話中展現的溝通習慣與情緒爆發/冷卻特徵。\n\n"
-            f"2. 【關係演變時間線與溫度曲線】：\n"
-            f"   - 萌芽/熱絡期：當初是怎麼聊起來的？被彼此哪些特質吸引？熱絡時的互動節奏。\n"
-            f"   - 關鍵轉折點：在哪個事件或時間點開始出現態度冷淡、回覆變慢、話不投機或衝突？\n"
-            f"   - 冷卻/疏離期：走向結束前的互動徵兆（敷衍、單方面付出、隔閡）。\n\n"
-            f"3. 【核心矛盾與相處盲點】：\n"
-            f"   - 兩人在價值觀、情緒表達或步調上的根本落差。\n"
-            f"   - 造成關係無法走下去的主因，以及互動中反覆出現的卡關模式。\n\n"
-            f"4. 【重大回憶與標誌性事件】：\n"
-            f"   - 共同約定、承諾過的事情、深入分享過的情感秘密或有特殊意義的時刻。\n\n"
-            f"5. 【當前定調與互動指引】：\n"
-            f"   - 總結這段關係對使用者的本質（例如：這是一段不對等的消耗、或純屬價值觀不合的遺憾等）。\n"
-            f"   - 面對未來的互動建議與心態界線。\n\n"
-            f"【完整歷史對話紀錄】：\n{full_conversations_text}"
+        template = FULL_SUMMARY_PROMPT_PATH.read_text(encoding="utf-8")
+        prompt = template.format(
+            display_name=display_name or "對方",
+            full_conversations_text=full_conversations_text
         )
         return self._generate_with_fallback(prompt, preferred_model=model)

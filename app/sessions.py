@@ -13,10 +13,16 @@ class SessionManager:
         self.session_dir.mkdir(parents=True, exist_ok=True)
         key = encryption_key or settings.SESSION_ENCRYPTION_KEY
         if not key:
-            generated_key = Fernet.generate_key().decode("utf-8")
-            self.cipher = Fernet(generated_key.encode("utf-8"))
-        else:
-            self.cipher = Fernet(key.encode("utf-8"))
+            key_file = self.session_dir.parent / ".session_key"
+            if key_file.exists():
+                key = key_file.read_text(encoding="utf-8").strip()
+            else:
+                key = Fernet.generate_key().decode("utf-8")
+                try:
+                    key_file.write_text(key, encoding="utf-8")
+                except Exception:
+                    pass
+        self.cipher = Fernet(key.encode("utf-8"))
 
     def _get_session_path(self, account_type: str) -> Path:
         return self.session_dir / f"{account_type}_account.json"

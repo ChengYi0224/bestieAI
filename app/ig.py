@@ -116,11 +116,14 @@ class IGClient:
                 params["cursor"] = cursor
 
             if page > 0:
-                # 批次冷卻：每爬取指定頁數（預設 5 頁約 100 則）就深度休眠一次
-                if batch_rest_pages > 0 and page % batch_rest_pages == 0:
-                    rest_time = batch_rest_seconds + random.uniform(2.0, 10.0)
+                # 批次冷卻：打破固定每 N 頁的規律，加入 4~7 頁的動態隨機週期與 35~80 秒高變異深度休眠
+                target_rest_interval = getattr(self, "_current_batch_rest_interval", batch_rest_pages)
+                if batch_rest_pages > 0 and page % target_rest_interval == 0:
+                    rest_time = random.uniform(batch_rest_seconds * 0.8, batch_rest_seconds * 2.2)
                     logger.info(f"已爬取 {page} 頁（{len(items)} 則），啟動風控防禦深層休眠 {rest_time:.1f} 秒...")
                     time.sleep(rest_time)
+                    # 重新隨機決定下一次的觸發間隔（例如 4 到 7 頁之間）
+                    self._current_batch_rest_interval = random.randint(max(3, batch_rest_pages - 1), batch_rest_pages + 2)
                 else:
                     paged_jitter(min_delay=min_delay, max_delay=max_delay)
             else:

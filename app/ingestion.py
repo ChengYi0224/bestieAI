@@ -337,14 +337,14 @@ class IngestionPipeline:
             raise ValueError(f"找不到與 {target_username} 的私訊對話串")
 
         thread_id = str(thread.id)
-        # 啟動慢速防風控爬取，每 5 頁休息 25 秒
+        # 啟動擬真人慢速防風控爬取（大標準差隨機延遲，每 4~7 頁深度休眠 35~80 秒）
         raw_messages = ig_client.get_thread_messages(
             thread_id=thread_id,
             amount=max_amount,
-            min_delay=3.0,
-            max_delay=6.5,
+            min_delay=3.5,
+            max_delay=14.0,
             batch_rest_pages=5,
-            batch_rest_seconds=25.0,
+            batch_rest_seconds=35.0,
             progress_callback=progress_callback
         )
 

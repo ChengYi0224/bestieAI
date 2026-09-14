@@ -117,6 +117,31 @@ def gemini_retry(max_short_retries: int = 2, base_delay: float = 1.5) -> Callabl
     return decorator
 
 
-def paged_jitter(min_delay: float = 1.5, max_delay: float = 4.0) -> None:
-    """分頁請求之間的隨機延遲，供手動插入迴圈中使用。"""
-    time.sleep(random.uniform(min_delay, max_delay))
+def calculate_human_delay(
+    min_delay: float = 3.5,
+    max_delay: float = 14.0,
+    pause_chance: float = 0.15,
+    pause_min: float = 18.0,
+    pause_max: float = 40.0
+) -> float:
+    """
+    計算擬真人高標準差延遲：
+    - 大多數請求在 min_delay ~ max_delay 之間隨機浮動，標準差顯著放大。
+    - 一定機率觸發長尾微停頓（Micro-pause，模擬真人閱讀或分心），有效打破固定機器人規律。
+    """
+    if random.random() < pause_chance:
+        delay = random.uniform(pause_min, pause_max)
+        logger.info(f"觸發擬真人長尾閱讀停頓：休眠 {delay:.1f} 秒...")
+        return delay
+    return random.uniform(min_delay, max_delay)
+
+
+def paged_jitter(
+    min_delay: float = 3.5,
+    max_delay: float = 14.0,
+    pause_chance: float = 0.15
+) -> float:
+    """分頁請求之間的隨機延遲，具備大標準差與微停頓特性。"""
+    delay = calculate_human_delay(min_delay=min_delay, max_delay=max_delay, pause_chance=pause_chance)
+    time.sleep(delay)
+    return delay

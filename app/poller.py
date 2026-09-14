@@ -1,8 +1,11 @@
 import time
 import socket
 import logging
+import queue
+import threading
+import functools
 from datetime import datetime
-from typing import Set, Optional, Dict, Any
+from typing import Set, Optional, Dict, Any, List
 from instagrapi import Client
 from instagrapi.exceptions import LoginRequired
 from app.config import settings
@@ -10,8 +13,34 @@ from app.sessions import SessionManager
 from app.ig import IGClient
 from app.router import CommandRouter
 from app.ingestion import IngestionPipeline
+from app.db import set_worker_status, get_worker_status, set_active_contact
 
 logger = logging.getLogger("bestieAI.poller")
+
+
+def require_whitelist(func):
+    """
+    Decorator：權限攔截裝飾器。
+    僅允許主帳號（本人）發送的私訊進入訊息分發流程，其餘帳號一律靜默丟棄。
+    """
+    @functools.wraps(func)
+    def wrapper(self, thread_id: str, user_id: str, item_id: str, text: str, *args, **kwargs):
+        # 若發送者是小帳（Bot 本人），直接忽略
+        bot_pk = str(getattr(self.bot_client, "user_id", ""))
+        if user_id and user_id == bot_pk:
+            return
+
+        # 若白名單 PK 尚未設定，嘗試動態解析一次
+        if not self.allowed_main_pk:
+            self._resolve_main_pk()
+
+        # 白名單校驗：若確認不是主帳號，靜默攔截
+        if self.allowed_main_pk and str(user_id) != str(self.allowed_main_pk):
+            logger.warning(f"[Security] 攔截到非主帳號 ({user_id}) 之私訊，已靜默忽略。")
+            return
+
+        return func(self, thread_id, user_id, item_id, text, *args, **kwargs)
+    return wrapper
 
 
 class BotPoller:
@@ -29,6 +58,26 @@ class BotPoller:
         self.bot_client: Optional[Client] = None
         self.bot_ig: Optional[IGClient] = None
         self.main_ig: Optional[IGClient] = None
+        self.allowed_main_pk: Optional[str] = settings.MAIN_ACCOUNT_USER_ID or None
+
+        # 背景爬蟲任務隊列與線程鎖
+        self._task_queue: queue.Queue = queue.Queue()
+        self._current_task: Optional[Dict[str, Any]] = None
+        self._worker_thread: Optional[threading.Thread] = None
+
+    def _resolve_main_pk(self) -> None:
+        """動態取得主帳號的 Instagram PK (User ID)。"""
+        if settings.MAIN_ACCOUNT_USER_ID:
+            self.allowed_main_pk = str(settings.MAIN_ACCOUNT_USER_ID)
+            return
+        if self.bot_client and settings.MAIN_ACCOUNT_USERNAME:
+            try:
+                pk = self.bot_client.user_id_from_username(settings.MAIN_ACCOUNT_USERNAME)
+                if pk:
+                    self.allowed_main_pk = str(pk)
+                    logger.info(f"已動態解析主帳號 {settings.MAIN_ACCOUNT_USERNAME} 之 PK: {self.allowed_main_pk}")
+            except Exception as e:
+                logger.warning(f"動態查詢主帳號 PK 失敗 ({e})，請於 .env 設定 MAIN_ACCOUNT_USER_ID。")
 
     def _setup_realtime(self) -> None:
         if not self.bot_client:
@@ -71,53 +120,31 @@ class BotPoller:
 
         self._process_message(thread_id, user_id, item_id, text)
 
-    def _process_message(self, thread_id: str, user_id: str, item_id: str, text: str) -> None:
-        if not text or not thread_id:
-            return
+    # ==================== 背景任務隊列 Worker ====================
 
-        if item_id and item_id in self.seen_message_ids:
-            return
-        if item_id:
-            self.seen_message_ids.add(item_id)
+    def _start_queue_worker(self) -> None:
+        """啟動單一背景 Worker 執行緒，確保所有全量爬取循序排隊執行，絕不併發。"""
+        if self._worker_thread is None or not self._worker_thread.is_alive():
+            self._worker_thread = threading.Thread(target=self._task_worker_loop, daemon=True)
+            self._worker_thread.start()
+            logger.info("背景任務 Worker 執行緒已啟動。")
 
-        bot_pk = str(getattr(self.bot_client, "user_id", ""))
-        if user_id and user_id == bot_pk:
-            return
-
-        logger.info(f"[Realtime Push] 收到來自 {user_id} 的訊息: {text}")
-        try:
-            result = self.router.handle_message(text)
-        except Exception as e:
-            logger.error(f"處理訊息時發生未預期錯誤: {e}")
-            if self.bot_ig:
-                self.bot_ig.send_message(thread_id, f"抱歉，系統暫時忙碌或發生錯誤：{e}\n請稍候再試。")
-            return
-
-        if not self.bot_ig:
-            return
-
-        if result.startswith("TRACK_REQUEST:"):
-            target = result.split(":", 1)[1]
-            self.bot_ig.send_message(thread_id, f"開始抓取與 {target} 的歷史訊息...")
+    def _task_worker_loop(self) -> None:
+        """Worker 主迴圈：從 Queue 取出任務、執行全量抓取，任務間強制安全冷卻 60~120 秒。"""
+        import random
+        while self.running:
             try:
-                if self.main_ig is None:
-                    main_client = self.session_manager.login("main")
-                    self.main_ig = IGClient(main_client)
-                info = self.ingestion.run_ingestion(self.main_ig, target)
-                from app.db import set_active_contact
-                set_active_contact(target)
-                reply_text = f"已追蹤 {target}，匯入 {info['inserted_messages']} 則訊息，關係摘要卡已建立。"
-            except Exception as ex:
-                logger.error(f"Ingestion 失敗: {ex}")
-                reply_text = f"追蹤 {target} 失敗: {ex}"
-            self.bot_ig.send_message(thread_id, reply_text)
+                task = self._task_queue.get(timeout=2.0)
+            except queue.Empty:
+                continue
 
-        elif result.startswith("TRACK_FULL_REQUEST:"):
-            _, target, max_amt_str = result.split(":", 2)
-            max_amt = int(max_amt_str)
-            amt_label = f"上限 {max_amt} 則" if max_amt > 0 else "無限制"
-            from app.db import set_worker_status, set_active_contact
+            self._current_task = task
+            target = task["target"]
+            max_amt = task["max_amount"]
+            thread_id = task["thread_id"]
             start_ts = time.time()
+
+            logger.info(f"[Worker] 開始處理排程任務：{target}（上限 {max_amt} 則）")
             set_worker_status({
                 "running": True,
                 "target": target,
@@ -126,18 +153,11 @@ class BotPoller:
                 "start_time": start_ts,
                 "pages": 0,
                 "count": 0,
+                "queue": self._get_queued_targets(),
                 "last_update": datetime.utcnow().isoformat()
             })
 
-            self.bot_ig.send_message(
-                thread_id,
-                f"已開始抓取 {target} 歷史紀錄（{amt_label}）。\n"
-                f"採慢速防風控模式，完成會通知。\n"
-                f"可輸入 status 查詢進度。"
-            )
-
             def on_full_progress(count: int, pages: int):
-                # 靜默記錄進度到 SQLite，不發送 IG 私訊打擾
                 set_worker_status({
                     "running": True,
                     "target": target,
@@ -146,9 +166,10 @@ class BotPoller:
                     "start_time": start_ts,
                     "pages": pages,
                     "count": count,
+                    "queue": self._get_queued_targets(),
                     "last_update": datetime.utcnow().isoformat()
                 })
-                logger.info(f"[Worker] {target} 慢速爬取進度：已抓第 {pages} 頁，累計 {count} 則")
+                logger.info(f"[Worker] {target} 慢速爬取進度：第 {pages} 頁，累計 {count} 則")
 
             try:
                 if self.main_ig is None:
@@ -167,7 +188,8 @@ class BotPoller:
                     "target": target,
                     "completed_at": datetime.utcnow().isoformat(),
                     "total_downloaded": info['downloaded_messages'],
-                    "elapsed_min": elapsed_min
+                    "elapsed_min": elapsed_min,
+                    "queue": self._get_queued_targets()
                 })
                 reply_text = (
                     f"{target} 歷史紀錄匯入完成（耗時 {elapsed_min} 分鐘）\n"
@@ -175,15 +197,124 @@ class BotPoller:
                     f"重構 Chunks: {info['chunks_rebuilt']} / 關係摘要卡已更新"
                 )
             except Exception as ex:
-                logger.error(f"全量抓取失敗: {ex}")
+                logger.error(f"[Worker] 全量抓取 {target} 失敗: {ex}")
                 set_worker_status({
                     "running": False,
                     "target": target,
                     "error": str(ex),
-                    "failed_at": datetime.utcnow().isoformat()
+                    "failed_at": datetime.utcnow().isoformat(),
+                    "queue": self._get_queued_targets()
                 })
                 reply_text = f"全量抓取 {target} 失敗: {ex}"
+
+            if self.bot_ig and thread_id:
+                try:
+                    self.bot_ig.send_message(thread_id, reply_text)
+                except Exception as send_err:
+                    logger.warning(f"發送完成通知失敗: {send_err}")
+
+            self._current_task = None
+            self._task_queue.task_done()
+
+            # 任務交接安全冷卻：若隊列中還有任務，強制休眠 60~120 秒，防 IG 連續大量翻頁風控
+            if not self._task_queue.empty():
+                cooldown = random.uniform(60.0, 120.0)
+                logger.info(f"[Worker] 任務 {target} 完成，安全冷卻 {cooldown:.1f} 秒後執行下一任務...")
+                time.sleep(cooldown)
+
+    def _get_queued_targets(self) -> List[str]:
+        """取得當前隊列中等待執行的對象清單。"""
+        with self._task_queue.mutex:
+            return [t["target"] for t in list(self._task_queue.queue)]
+
+    # ==================== 訊息接收與分發 ====================
+
+    @require_whitelist
+    def _process_message(self, thread_id: str, user_id: str, item_id: str, text: str) -> None:
+        if not text or not thread_id:
+            return
+
+        if item_id and item_id in self.seen_message_ids:
+            return
+        if item_id:
+            self.seen_message_ids.add(item_id)
+
+        logger.info(f"[Realtime Push] 收到授權主帳號 ({user_id}) 訊息: {text}")
+        try:
+            result = self.router.handle_message(text)
+        except Exception as e:
+            logger.error(f"處理訊息時發生未預期錯誤: {e}")
+            if self.bot_ig:
+                self.bot_ig.send_message(thread_id, f"系統暫時忙碌或發生錯誤：{e}")
+            return
+
+        if not self.bot_ig:
+            return
+
+        if result.startswith("TRACK_REQUEST:"):
+            target = result.split(":", 1)[1]
+            self.bot_ig.send_message(thread_id, f"開始抓取與 {target} 的歷史訊息...")
+            try:
+                if self.main_ig is None:
+                    main_client = self.session_manager.login("main")
+                    self.main_ig = IGClient(main_client)
+                info = self.ingestion.run_ingestion(self.main_ig, target)
+                set_active_contact(target)
+                reply_text = f"已追蹤 {target}，匯入 {info['inserted_messages']} 則訊息，關係摘要卡已建立。"
+            except Exception as ex:
+                logger.error(f"Ingestion 失敗: {ex}")
+                reply_text = f"追蹤 {target} 失敗: {ex}"
             self.bot_ig.send_message(thread_id, reply_text)
+
+        elif result.startswith("TRACK_FULL_REQUEST:"):
+            _, target, max_amt_str = result.split(":", 2)
+            max_amt = int(max_amt_str)
+            amt_label = f"上限 {max_amt} 則" if max_amt > 0 else "無限制"
+
+            # 確保背景 Worker 執行緒已在運作
+            self._start_queue_worker()
+
+            # 邊界案例 1：若目前正在抓取同一個對象
+            if self._current_task and self._current_task.get("target") == target:
+                w_status = get_worker_status()
+                pages = w_status.get("pages", 0) if w_status else 0
+                count = w_status.get("count", 0) if w_status else 0
+                self.bot_ig.send_message(
+                    thread_id,
+                    f"已有相同任務進行中：{target} 全量抓取中（目前第 {pages} 頁 / {count} 則），請稍候完成。"
+                )
+                return
+
+            # 邊界案例 2：若該對象已經在佇列中排隊
+            queued = self._get_queued_targets()
+            if target in queued:
+                pos = queued.index(target) + 1
+                self.bot_ig.send_message(
+                    thread_id,
+                    f"{target} 已在排程名單中（排隊順位: {pos}），前項任務完成後將自動執行。"
+                )
+                return
+
+            # 邊界案例 3：若目前有其他任務正在跑，排入 Queue
+            if self._current_task is not None:
+                self._task_queue.put({"target": target, "max_amount": max_amt, "thread_id": thread_id})
+                queued = self._get_queued_targets()
+                pos = len(queued)
+                self.bot_ig.send_message(
+                    thread_id,
+                    f"目前正在抓取 {self._current_task.get('target')}，已將 {target} 加入排程（順位: {pos}）。\n"
+                    f"將於前一任務完成且安全冷卻後自動啟動。"
+                )
+                return
+
+            # 邊界案例 4：無任何任務進行中，直接放入 Queue 開始執行
+            self._task_queue.put({"target": target, "max_amount": max_amt, "thread_id": thread_id})
+            self.bot_ig.send_message(
+                thread_id,
+                f"已開始抓取 {target} 歷史紀錄（{amt_label}）。\n"
+                f"採慢速防風控模式，完成會通知。\n"
+                f"可輸入 status 查詢進度。"
+            )
 
         elif result.startswith("REFRESH_SUMMARY_REQUEST:"):
             target = result.split(":", 1)[1]
@@ -270,6 +401,8 @@ class BotPoller:
         try:
             self.bot_client = self.session_manager.login("bot")
             self.bot_ig = IGClient(self.bot_client)
+            self._resolve_main_pk()
+            self._start_queue_worker()
         except Exception as e:
             logger.error(f"Bot 登入失敗: {e}")
             return
