@@ -176,7 +176,155 @@ class IngestionPipeline:
                 fallback = self._build_chunk_dict(len(event_chunks) + 1, batch)
                 event_chunks.append(fallback)
 
+            if i + batch_size < len(sorted_msgs):
+                pacing = getattr(settings, "GEMINI_PACING_DELAY", 4.2)
+                if pacing > 0:
+                    time.sleep(pacing)
+
         return event_chunks
+
+    @staticmethod
+    def _cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
+        dot = sum(a * b for a, b in zip(vec_a, vec_b))
+        norm_a = sum(a * a for a in vec_a) ** 0.5
+        norm_b = sum(b * b for b in vec_b) ** 0.5
+        if norm_a == 0.0 or norm_b == 0.0:
+            return 0.0
+        return dot / (norm_a * norm_b)
+
+    @staticmethod
+    def _parse_time_str(time_str: Optional[str]) -> Optional[datetime]:
+        if not time_str:
+            return None
+        try:
+            return datetime.fromisoformat(time_str)
+        except Exception:
+            pass
+        try:
+            return datetime.strptime(time_str[:10], "%Y-%m-%d")
+        except Exception:
+            return None
+
+    def cluster_similar_events(
+        self,
+        chunks: List[Dict[str, Any]],
+        similarity_threshold: Optional[float] = None,
+        max_hours_gap: Optional[float] = None
+    ) -> List[List[Dict[str, Any]]]:
+        """
+        時序感知語意向量分群（Temporal-aware Cosine Clustering）：
+        1. 批次取得所有事件的 Embedding 向量。
+        2. 若兩事件在時間差 <= max_hours_gap 且 Cosine Similarity >= similarity_threshold，
+           則建立連結，透過連通元件（Connected Components）劃分 Cluster。
+        """
+        if not chunks or len(chunks) <= 1:
+            return [[c] for c in chunks]
+
+        sim_thresh = similarity_threshold if similarity_threshold is not None else getattr(
+            settings, "EVENT_CLUSTER_SIMILARITY_THRESHOLD", 0.80
+        )
+        max_gap = max_hours_gap if max_hours_gap is not None else getattr(
+            settings, "EVENT_CLUSTER_MAX_HOURS_GAP", 36.0
+        )
+
+        # 批次取得向量
+        try:
+            if hasattr(self.vector_store, "get_embeddings_batch"):
+                texts = [c["text"] for c in chunks]
+                embeddings = self.vector_store.get_embeddings_batch(texts)
+            else:
+                return [[c] for c in chunks]
+        except Exception as e:
+            logger.warning(f"取得分群向量失敗，跳過分群: {e}")
+            return [[c] for c in chunks]
+
+        n = len(chunks)
+        parsed_times = []
+        for c in chunks:
+            t = self._parse_time_str(c.get("start_time"))
+            if not t:
+                text = c.get("text", "")
+                if text.startswith("[") and len(text) >= 11 and text[1:11].count("-") == 2:
+                    t = self._parse_time_str(text[1:11])
+            parsed_times.append(t)
+
+        adj: Dict[int, List[int]] = {i: [] for i in range(n)}
+        for i in range(n):
+            for j in range(i + 1, n):
+                t_i, t_j = parsed_times[i], parsed_times[j]
+                if t_i and t_j:
+                    hours_diff = abs((t_i - t_j).total_seconds()) / 3600.0
+                    if hours_diff > max_gap:
+                        continue
+
+                sim = self._cosine_similarity(embeddings[i], embeddings[j])
+                if sim >= sim_thresh:
+                    adj[i].append(j)
+                    adj[j].append(i)
+
+        visited = [False] * n
+        clusters: List[List[Dict[str, Any]]] = []
+        for i in range(n):
+            if not visited[i]:
+                component_indices = []
+                queue = [i]
+                visited[i] = True
+                while queue:
+                    curr = queue.pop(0)
+                    component_indices.append(curr)
+                    for neighbor in adj[curr]:
+                        if not visited[neighbor]:
+                            visited[neighbor] = True
+                            queue.append(neighbor)
+                clusters.append([chunks[idx] for idx in component_indices])
+
+        return clusters
+
+    def consolidate_event_chunks(self, chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        同質無損融合管線：
+        1. 執行時序向量分群。
+        2. 孤立事件直接保留。
+        3. Cluster >= 2 呼叫 Lite 模型無損融合去重，同主題融合細節、異主題各自保留。
+        """
+        if not chunks or len(chunks) <= 1:
+            return chunks
+
+        clusters = self.cluster_similar_events(chunks)
+        final_chunks: List[Dict[str, Any]] = []
+        pacing = getattr(settings, "GEMINI_PACING_DELAY", 4.2)
+
+        for cluster in clusters:
+            if len(cluster) == 1:
+                final_chunks.append(cluster[0])
+                continue
+
+            cluster_texts = [c["text"] for c in cluster]
+            try:
+                consolidated_texts = self.llm_client.consolidate_events(cluster_texts)
+                if pacing > 0:
+                    time.sleep(pacing)
+
+                valid_starts = [c.get("start_time", "") for c in cluster if c.get("start_time")]
+                valid_ends = [c.get("end_time", "") for c in cluster if c.get("end_time")]
+                min_start = min(valid_starts) if valid_starts else ""
+                max_end = max(valid_ends) if valid_ends else ""
+                total_msgs = sum(c.get("message_count", 1) for c in cluster)
+
+                for k, text in enumerate(consolidated_texts):
+                    final_chunks.append({
+                        "id": f"{cluster[0]['id']}_c{k}",
+                        "text": text,
+                        "start_time": min_start,
+                        "end_time": max_end,
+                        "message_count": total_msgs,
+                        "type": "event_memory"
+                    })
+            except Exception as e:
+                logger.warning(f"無損融合失敗，保留原事件: {e}")
+                final_chunks.extend(cluster)
+
+        return final_chunks
 
     def check_and_update_summary(
         self,
@@ -304,6 +452,7 @@ class IngestionPipeline:
         # 批次萃取事件條目並寫入向量庫
         chunks = self.extract_event_chunks(processed_msgs)
         if chunks:
+            chunks = self.consolidate_event_chunks(chunks)
             self.vector_store.add_chunks(contact_id=contact_id, chunks=chunks)
 
         updated_summary = self.check_and_update_summary(contact_id=contact_id, db_path=db_path)
@@ -355,6 +504,7 @@ class IngestionPipeline:
         # 萃取事件記憶
         chunks = self.extract_event_chunks(processed_msgs)
         if chunks:
+            chunks = self.consolidate_event_chunks(chunks)
             self.vector_store.add_chunks(contact_id=contact_id, chunks=chunks)
 
         all_text = "\n".join([f"{'我' if m['sender']=='me' else '對方'}: {m['content']}" for m in processed_msgs])
@@ -463,7 +613,9 @@ class IngestionPipeline:
             pass
 
         chunks = self.extract_event_chunks(msg_dicts)
-        if not chunks:
+        if chunks:
+            chunks = self.consolidate_event_chunks(chunks)
+        else:
             chunks = self.chunk_messages(msg_dicts)
         self.vector_store.add_chunks(contact_id=contact_id, chunks=chunks)
 

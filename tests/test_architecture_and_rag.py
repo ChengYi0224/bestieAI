@@ -178,3 +178,89 @@ def test_repositories_crud(tmp_path):
     status = b_repo.get_worker_status()
     assert status["running"] is True
     assert status["target"] == "user_test"
+
+
+def test_temporal_vector_clustering():
+    """驗證時序向量分群：時間差 <= 36h 且相似度 >= 0.80 聚為同一 Cluster，否則獨立。"""
+    pipeline = IngestionPipeline()
+    mock_vector = MagicMock()
+    # 建立 4 個事件的向量：
+    # ev0 & ev1: 同一天，高相似度 (sim ~ 0.999) -> 應同一 Cluster
+    # ev2: 同一天，低相似度 (sim ~ 0.0) -> 應獨立
+    # ev3: 與 ev0 高相似度，但相隔 100 小時 (> 36h) -> 應獨立
+    mock_vector.get_embeddings_batch.return_value = [
+        [1.0, 0.0],       # ev0
+        [0.99, 0.05],     # ev1 (與 ev0 sim ~ 0.998)
+        [0.0, 1.0],       # ev2 (與 ev0 sim = 0.0)
+        [1.0, 0.0],       # ev3 (與 ev0 相同向量，但時間相隔數天)
+    ]
+    pipeline.vector_store = mock_vector
+
+    chunks = [
+        {"id": "ev0", "text": "[2026-08-15] 兩人討論去沖繩玩", "start_time": "2026-08-15T10:00:00"},
+        {"id": "ev1", "text": "[2026-08-15] 兩人規劃去沖繩吃石垣牛", "start_time": "2026-08-15T14:00:00"},
+        {"id": "ev2", "text": "[2026-08-15] 對方機車在路上拋錨", "start_time": "2026-08-15T18:00:00"},
+        {"id": "ev3", "text": "[2026-08-20] 兩人再度提議去沖繩海邊", "start_time": "2026-08-20T10:00:00"},
+    ]
+
+    clusters = pipeline.cluster_similar_events(chunks, similarity_threshold=0.80, max_hours_gap=36.0)
+
+    # 應分成 3 個 Cluster:
+    # Cluster 1: [ev0, ev1]
+    # Cluster 2: [ev2]
+    # Cluster 3: [ev3]
+    assert len(clusters) == 3
+
+    cluster_ids = [[c["id"] for c in cl] for cl in clusters]
+    assert ["ev0", "ev1"] in cluster_ids
+    assert ["ev2"] in cluster_ids
+    assert ["ev3"] in cluster_ids
+
+
+def test_lossless_consolidation_pipeline(monkeypatch):
+    """驗證同質無損融合：孤立事件跳過 LLM，候選群組觸發 Lite 模型融合。"""
+    monkeypatch.setattr(settings, "GEMINI_PACING_DELAY", 0.0)
+
+    mock_llm = MagicMock()
+    mock_llm.consolidate_events.return_value = [
+        "[2026-08-15] 兩人規劃沖繩自由行，討論吃石垣牛與自駕租車"
+    ]
+
+    mock_vector = MagicMock()
+    # ev0 與 ev1 高相似度，ev2 獨立
+    mock_vector.get_embeddings_batch.return_value = [
+        [1.0, 0.0],
+        [0.98, 0.1],
+        [0.0, 1.0],
+    ]
+
+    pipeline = IngestionPipeline(vector_store=mock_vector, llm_client=mock_llm)
+
+    chunks = [
+        {"id": "0", "text": "[2026-08-15] 兩人討論去沖繩玩", "start_time": "2026-08-15T10:00:00", "end_time": "2026-08-15T10:30:00", "message_count": 20},
+        {"id": "1", "text": "[2026-08-15] 兩人規劃去沖繩吃石垣牛", "start_time": "2026-08-15T14:00:00", "end_time": "2026-08-15T14:30:00", "message_count": 20},
+        {"id": "2", "text": "[2026-08-15] 機車拋錨抱怨", "start_time": "2026-08-15T18:00:00", "end_time": "2026-08-15T18:30:00", "message_count": 10},
+    ]
+
+    final_chunks = pipeline.consolidate_event_chunks(chunks)
+
+    # 應產出 2 條 chunks（1 條融合後沖繩事件 + 1 條原樣拋錨事件）
+    assert len(final_chunks) == 2
+    # consolidate_events 只被呼叫 1 次（只針對沖繩 cluster）
+    mock_llm.consolidate_events.assert_called_once()
+    call_args = mock_llm.consolidate_events.call_args[0][0]
+    assert len(call_args) == 2
+    assert "去沖繩玩" in call_args[0]
+    assert "吃石垣牛" in call_args[1]
+
+    # 驗證融合後的 chunk 含有整合後的時間與訊息數
+    okinawa_chunk = next(c for c in final_chunks if "沖繩" in c["text"])
+    assert okinawa_chunk["message_count"] == 40
+    assert okinawa_chunk["start_time"] == "2026-08-15T10:00:00"
+    assert okinawa_chunk["end_time"] == "2026-08-15T14:30:00"
+
+    # 驗證獨立的拋錨 chunk 原樣保留
+    scooter_chunk = next(c for c in final_chunks if "拋錨" in c["text"])
+    assert scooter_chunk["id"] == "2"
+    assert scooter_chunk["message_count"] == 10
+
