@@ -1,4 +1,4 @@
-# 💬 bestieAI — Instagram 專屬 AI 社交與情感決策助理
+# 💬 BestieAI — Instagram 專屬 AI 社交與情感決策助理
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![uv](<https://img.shields.io/badge/package%20manager-uv-green.svg>)](https://github.com/astral-sh/uv)
@@ -10,7 +10,7 @@
 
 ---
 
-## 📱 實機畫面展示（Mobile Screenshots）
+## 📱 實機畫面展示
 
 <p align="center">
   <img src="docs/images/1_help.jpg" width="45%" alt="指令清單與即時狀態查詢" />
@@ -23,7 +23,7 @@
 
 ---
 
-## 💡 核心使用情境（User Journey）
+## 💡 核心使用情境
 
 ```
 [使用者手機 IG App] (你的主帳號)
@@ -40,29 +40,28 @@
 
 ────────────────────────────────────────────────────────────
 
-[日常聊天與策略建議]
+[日常聊天與策略討論]
        │
-       │ 2. 使用者傳送：「他剛剛回覆『隨便啊』，這到底什麼意思？我該怎麼回？」
+       │ 2. 使用者傳送：「他剛剛回覆『隨便啊』，這到底什麼意思，我要怎麼回」
        ▼
 [bestieAI 動態組裝提示詞]
-       ├─ 長期記憶：讀取 alex_123 深度關係摘要卡（長期性格與走向）
-       ├─ 自身記憶：從獨立 user_self 向量庫檢索使用者自身的近況與習慣
-       ├─ 中期 RAG：以「隨便啊」語意搜尋歷史最相關對話片段
+       ├─ 長期記憶：讀取 alex_123 關係摘要卡（性格慣性、溝通模式與關係底線）
+       ├─ 自身記憶：從獨立 user_self 向量庫檢索使用者自身的習慣與近況
+       ├─ 中期 RAG：以「隨便啊」語意搜尋歷史最相關的爭執或互動片段
        ├─ 短期記憶：撈取 IG 最近 30 則原始對話 ＋ 最近 10 輪與 Bot 討論歷史
        └─ 跨對象調用：若訊息提到其他朋友暱稱（如「小伊」），同步調出該對象記憶
        │
        ▼
-[Bot 帳號私訊回覆]：
-       ① 先同理接住使用者的焦慮情緒
-       ② 客觀剖析對方字面下的真實語氣
-       ③ 提供 2~3 種不同風格的回覆選項（直球 / 幽默調侃 / 保持距離）
+[Bot 帳號私訊回覆]（像真人朋友般自然給予建議，拒絕 AI 報告腔）：
+       「欸不是，妳先冷靜。翻一下紀錄他加班後本來就常回這句，不是針對妳在冷淡。
+        如果妳想接球但不想給壓力，直接回『好喔那我先去忙～晚點再說』就好，不要急著腦補追問。」
 ```
 
 ---
 
 ## 🛠️ 技術架構與工程亮點
 
-### 1. 五層分層記憶架構（Hierarchical Memory & RAG）
+### 1. Hierarchical Memory & RAG
 
 為了克服 LLM 上下文長度限制並大幅降低 Token 成本，系統設計了多層次記憶模型：
 
@@ -70,9 +69,9 @@
 - **使用者自身 RAG（個人認知）**：獨立 `user_self` ChromaDB 集合，每次對話後背景執行緒自動萃取使用者近況與習慣，實現真正「了解我」的跨對話長效記憶。
 - **暱稱索引與跨對象檢索**：支援 `nickname` 指令設定別名，聊天時提及朋友暱稱自動動態關聯查詢該對象之記憶。
 - **ChromaDB 向量庫（中期語意記憶）**：按時間與對話密度切塊，採用 `gemini-embedding-2` 進行語意搜尋。
-- **上下文與對話輪次（短期記憶）**：載入最近 20 則 IG 原始訊息與最近 10 輪 Bot 討論歷史，確保語境完全連貫。
+- **上下文與對話輪次（短期記憶）**：載入最近 30 則 IG 原始訊息與最近 10 輪 Bot 討論歷史，確保語境完全連貫。
 
-### 2. 反爬蟲與風控安全工程（Anti-Bot & Reliability）
+### 2. 反爬蟲與風控安全工程
 
 由於採用私有 API 模擬 App 登入，防風控為本專案核心關鍵：
 
@@ -120,43 +119,77 @@
 
 ## 🚀 快速開始
 
-### 1. 安裝環境依賴
+### 步驟 1：環境前置準備
 
-本專案使用高效能 Python 套件管理工具 `uv`：
+請確保本機已安裝 **Python 3.11+** 以及 Python 套件管理工具 **`uv`**。
 
-```bash
-uv sync
-```
+- **安裝 `uv`（若尚未安裝）**：
+  - **macOS / Linux**：
+    ```bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
+  - **Windows (PowerShell)**：
+    ```powershell
+    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+    ```
+  - 或透過 pip 安裝：`pip install uv`
 
-### 2. 配置環境變數
+---
+
+### 步驟 2：複製並設定環境變數（`.env`）
+
+複製範本檔案建立本機環境設定：
 
 ```bash
 cp .env.example .env
 ```
 
-開啟 `.env` 填入必要資訊：
+開啟 `.env`，**至少需填入以下 5 項核心金鑰與帳號密碼**：
 
-- `MAIN_ACCOUNT_USERNAME` / `MAIN_ACCOUNT_PASSWORD`：本人 IG 帳號密碼（讀取歷史對話）
-- `BOT_ACCOUNT_USERNAME` / `BOT_ACCOUNT_PASSWORD`：專用 Bot IG 帳號密碼（接收指令與發送建議）
-- `GEMINI_API_KEY`：Google Gemini API 金鑰
+| 必填欄位                  | 說明                              | 說明與取得方式                                                   |
+| ------------------------- | --------------------------------- | ---------------------------------------------------------------- |
+| `MAIN_ACCOUNT_USERNAME` | 使用者本人的 IG 帳號（大帳）      | `your_main_username`（負責安全讀取目標對象歷史對話）           |
+| `MAIN_ACCOUNT_PASSWORD` | 本人 IG 帳號密碼                  | `your_main_password`                                           |
+| `BOT_ACCOUNT_USERNAME`  | AI 陪聊專用 IG 機器人帳號（小帳） | `your_bot_username`（負責接收私訊指令並回傳策略建議）          |
+| `BOT_ACCOUNT_PASSWORD`  | 機器人帳號密碼                    | `your_bot_password`                                            |
+| `GEMINI_API_KEY`        | Google Gemini API 金鑰            | 可在[Google AI Studio](https://aistudio.google.com/) 免費申請取得 |
 
-### 3. 執行單元測試
+> 💡 **可選進階設定**：
+>
+> - `SESSION_ENCRYPTION_KEY`：若留空，系統將自動產生並持久化於 `data/.session_key`。
+> - `MAIN_ACCOUNT_USER_ID`：若留空，系統啟動時會自動透過 API 動態解析主帳號 PK 作為白名單授權依據。
+> - 其他 RAG 筆數與爬蟲門檻均具備完整預設值（見 `app/config.py`）。
+
+---
+
+### 步驟 3：安裝依賴套件
+
+使用 `uv` 一鍵建立虛擬環境並同步所有依賴：
 
 ```bash
-uv run pytest -v tests
+uv sync
 ```
 
-### 4. 啟動服務
+---
+
+### 步驟 4：啟動機器人服務
 
 ```bash
 uv run python main.py
 ```
 
-> 首次啟動若觸發 IG 安全驗證或 2FA，終端機會提示輸入驗證碼。驗證通過後 Session 將加密持久化於 `data/sessions/`，後續重啟無需重新登入。
+> **首次啟動提示**：
+> 若 Instagram 觸發安全驗證或 2FA，終端機將出現互動式提示，請直接於終端機輸入驗證碼。驗證成功後，Session 會以 Fernet 加密保存於 `data/sessions/`，後續重啟不需再次輸入密碼或驗證碼。
 
 ---
 
-## 測試涵蓋
+## 🧪 測試涵蓋
+
+若需執行完整單元測試驗證各模組功能：
+
+```bash
+uv run pytest -v tests
+```
 
 - **`test_api_contracts.py`**：Instagrapi 與 Gemini SDK 合約模擬測試
 - **`test_db.py`**：資料庫遷移、聯絡人 CRUD、訊息去重與摘要門檻判斷
