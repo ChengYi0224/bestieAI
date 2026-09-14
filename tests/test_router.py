@@ -76,24 +76,24 @@ def test_select_fuzzy_matching(tmp_path):
     init_db(db_file)
     router = CommandRouter(memory_manager=MagicMock(), llm_client=MagicMock(), db_path=db_file)
 
-    # 建立兩個聯絡人：一個包含 syun，另一個也包含 syun
-    get_or_create_contact("sample_user_01", "Syun", db_path=db_file)
-    get_or_create_contact("syun_friend", "Syun Friend", db_path=db_file)
+    # 建立兩個聯絡人：一個包含 sample，另一個也包含 sample
+    get_or_create_contact("sample_user_01", "Sample", db_path=db_file)
+    get_or_create_contact("sample_friend", "Sample Friend", db_path=db_file)
     get_or_create_contact("alice_w", "Alice", db_path=db_file)
 
     # 1. 單一吻合模糊查詢（例如 "alice"）
     res_single = router.handle_message("select alice")
     assert "目前作用對象已切換為：alice_w" in res_single
 
-    # 2. 完全相等的精準查詢（例如 "sample_user_01"）即便多個包含 syun 也直接切換
+    # 2. 完全相等的精準查詢（例如 "sample_user_01"）即便多個包含 sample 也直接切換
     res_exact = router.handle_message("select sample_user_01")
     assert "目前作用對象已切換為：sample_user_01" in res_exact
 
-    # 3. 多重候選查詢（例如 "syun" 匹配 2 個）
-    res_multi = router.handle_message("select syun")
-    assert "找到 2 個符合「syun」的對象" in res_multi
-    assert "1. syun" in res_multi
-    assert "2. syun" in res_multi
+    # 3. 多重候選查詢（例如 "sample" 匹配 2 個）
+    res_multi = router.handle_message("select sample")
+    assert "找到 2 個符合「sample」的對象" in res_multi
+    assert "1. sample" in res_multi
+    assert "2. sample" in res_multi
     assert "直接回傳數字如 1" in res_multi
 
     # 4. 回傳數字 1 確認切換

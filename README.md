@@ -2,7 +2,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![uv](<https://img.shields.io/badge/package%20manager-uv-green.svg>)](https://github.com/astral-sh/uv)
-[![Tests Passing](<https://img.shields.io/badge/tests-45%20passed-brightgreen.svg>)]()
+[![Tests Passing](<https://img.shields.io/badge/tests-57%20passed-brightgreen.svg>)]()
 
 **bestieAI** 是一個專為個人打造的 Instagram AI 陪聊與回覆策略機器人。
 
@@ -83,33 +83,39 @@
 
 ### 3. 架構設計與高容錯 LLM 陣列
 
-- **宣告式指令註冊（`@command_handler`）**：淘汰龐大的 `if/elif` 判斷，採用 Registry 模式達成高內聚低耦合。
+- **多組 Gemini API Key 動態輪換（Round-Robin）**：支援在環境變數設定多組 API Key（逗號分隔），底層 `GeminiKeyRing` 自動平均負載；遇到個別 Key 429 配額超限時，自動將該 Key 標記冷卻 65 秒並即時切換下一組有效 Key，有效突破免費方案每分鐘限制。
+- **高內聚單一職責分層（SRP）**：
+  - **`app/clients/`**：封裝外部服務協議與金鑰輪換（`gemini.py`, `instagram.py`）。
+  - **`app/pipelines/`**：業務管線自給自足，組裝專屬 Prompt（事件提煉、時序分群、批次融合、人物摘要）。
+  - **`app/storage/`**：純化本地存儲職責（`db.py` SQLite 事實來源、`chroma_store.py` 純本地向量索引）。
+- **宣告式指令註冊（`@command_handler`）**：淘汰龐大的 `if/elif` 判斷，採用 Registry 模式達成高內聚低耦合，並支援簡短別名。
 - **多模型自動容錯降級陣列**：遇到 API 尖峰、503 過載或限速時，自動依序切換候選模型（`gemini-3.8-flash` → `gemini-3.7-flash` → `gemini-3.6-flash` → `gemini-3.5-flash-lite`）。
-- **外部 Prompt 範本化**：所有 Prompt 全面抽離為 `.txt` 檔案，支援獨立熱更新與版本控管。
+- **外部 Prompt 範本化**：所有 Prompt 全面抽離為 `app/prompts/*.txt` 檔案，無任何寫死字串，支援獨立熱更新與版本控管。
 
 ---
 
 ## 📋 指令一覽表
 
-從**你的主帳號手機 IG 私訊**傳送給 Bot 帳號：
+從**你的主帳號手機 IG 私訊**傳送給 Bot 帳號（支援括號內的極簡短別名）：
 
-| 指令                                    | 說明                                                                                                   |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `track <IG_ID>`                       | 首次追蹤：爬取近一個月對話、向量化並生成初始人物關係摘要卡                                             |
-| `track_full [IG_ID] [上限]`           | 安全慢速抓取歷史訊息：預設最多 5000 則（可在`.env` 調整），含自動去重與重構向量庫                    |
-| `select <關鍵字>`                     | 切換目前討論對象（支援模糊搜尋與數字回覆）                                                             |
-| `nickname <暱稱> [IG_ID]`             | 為目前對象或指定帳號設定專屬暱稱                                                                       |
-| `card [IG_ID/暱稱]`                   | 直接檢視已儲存的人物關係摘要卡（不消耗 API、即時回傳）                                                 |
-| `me <內容>`                           | 主動讓 AI 記住關於你的生活近況、習慣或偏好（寫入`user_self` RAG）                                    |
-| `summarize_history [IG_ID]`           | **全景關係深度復盤**：以自始至終完整歷史對話（預設 `gemini-3.5-flash-lite`）建立長期全貌摘要卡 |
-| `sync [IG_ID]`                        | 增量同步最新訊息；累積達 50 則自動觸發摘要卡更新                                                       |
-| `rebuild_vectors [IG_ID]`             | 從本地 SQLite 重建向量庫（**不需重新爬 IG**，修復 Embedding 用）                                 |
-| `refresh_summary [IG_ID]`             | 強制以近期對話增量更新摘要卡                                                                           |
-| `status`（或 `query`）              | 顯示目前對象追蹤狀態與暱稱；若背景爬蟲正在執行，同步顯示即時頁數與則數                                 |
-| `list`                                | 列出所有已追蹤對象及其暱稱                                                                             |
-| `untrack <IG_ID>`                     | 標記為停止追蹤（保留歷史資料）                                                                         |
-| `help`（或 `h` / `?` / `指令`） | 查詢所有可用指令說明與格式                                                                             |
-| `<一般訊息>`                          | 進入 AI 陪聊模式；提及朋友暱稱時自動觸發跨對話記憶檢索                                                 |
+| 指令 | 別名 | 說明 |
+| :--- | :--- | :--- |
+| `track <IG_ID>` | `t` | 首次追蹤：爬取近一個月對話、向量化並生成初始人物關係摘要卡 |
+| `track_full [IG_ID] [上限]` | `tf` | 安全慢速抓取歷史訊息：預設最多 5000 則（可在`.env` 調整），含自動去重與重構向量庫 |
+| `select <關鍵字>` | `s` | 切換目前討論對象（支援模糊搜尋與數字回覆） |
+| `nickname <暱稱> [IG_ID]` | `nn` | 為目前對象或指定帳號設定專屬暱稱 |
+| `card [IG_ID/暱稱]` | `c` | 檢視日常輕量人物關係摘要卡（300~500字，不消耗 API、即時回傳） |
+| `card full [IG_ID/暱稱]` | `cf` | 檢視 7 大章節全景關係深度復盤長文（若已生成過則直接回傳） |
+| `me <內容>` | — | 主動讓 AI 記住關於你的生活近況、習慣或偏好（寫入 `self_memory` RAG） |
+| `summarize_history [IG_ID]` | `sh` | **全景關係深度復盤**：以自始至終完整歷史對話建立 7 大章節長期全貌長文與日常卡 |
+| `sync [IG_ID]` | — | 增量同步最新訊息；累積達 50 則自動觸發摘要卡更新 |
+| `rebuild_vectors [IG_ID]` | `rv` | 從本地 SQLite 重建向量庫（**不需重新爬 IG**，修復 Embedding 用） |
+| `refresh_summary [IG_ID]` | `rs` | 強制以近期對話增量更新摘要卡 |
+| `status` | `st`, `query`, `q` | 顯示目前對象追蹤狀態與暱稱；若背景爬蟲正在執行，同步顯示即時頁數與則數 |
+| `list` | `ls`, `l` | 列出所有已追蹤對象及其暱稱 |
+| `untrack <IG_ID>` | — | 標記為停止追蹤（保留歷史資料） |
+| `help` | `h`, `?`, `指令` | 查詢核心指令說明；使用 `help all` 查詢完整進階維護指令 |
+| `<一般訊息>` | — | 進入 AI 陪聊模式；提及朋友暱稱時自動觸發跨對話記憶檢索 |
 
 > [!WARNING]
 > **⚠️ API Token 額度與用量注意**：
@@ -152,13 +158,14 @@ cp .env.example .env
 | `MAIN_ACCOUNT_PASSWORD` | 本人 IG 帳號密碼                  | `your_main_password`                                           |
 | `BOT_ACCOUNT_USERNAME`  | AI 陪聊專用 IG 機器人帳號（小帳） | `your_bot_username`（負責接收私訊指令並回傳策略建議）          |
 | `BOT_ACCOUNT_PASSWORD`  | 機器人帳號密碼                    | `your_bot_password`                                            |
-| `GEMINI_API_KEY`        | Google Gemini API 金鑰            | 可在[Google AI Studio](https://aistudio.google.com/) 免費申請取得 |
+| `GEMINI_API_KEY`        | Google Gemini API 金鑰            | 單組金鑰（或改用 `GEMINI_API_KEYS` 多組輪換）可在 [Google AI Studio](https://aistudio.google.com/) 申請 |
+| `GEMINI_API_KEYS`       | 多組 Gemini 金鑰（選填）          | 支援以逗號分隔填入多組金鑰（如 `key1,key2,key3`），啟動自動輪換與個別 429 標記冷卻 |
 
 > 💡 **可選進階設定**：
 >
 > - `SESSION_ENCRYPTION_KEY`：若留空，系統將自動產生並持久化於 `data/.session_key`。
 > - `MAIN_ACCOUNT_USER_ID`：若留空，系統啟動時會自動透過 API 動態解析主帳號 PK 作為白名單授權依據。
-> - 其他 RAG 筆數與爬蟲門檻均具備完整預設值（見 `app/config.py`）。
+> - 其他 RAG 筆數與爬蟲門檻均具備完整預設值（見 `app/core/config.py`）。
 
 ---
 
@@ -191,6 +198,7 @@ uv run python main.py
 uv run pytest -v tests
 ```
 
+- **`test_architecture_and_rag.py`**：時序向量分群演算法、多 Cluster 批次融合、共享向量檢索、時間感知滑動窗口切塊
 - **`test_api_contracts.py`**：Instagrapi 與 Gemini SDK 合約模擬測試
 - **`test_db.py`**：資料庫遷移、聯絡人 CRUD、訊息去重與摘要門檻判斷
 - **`test_self_rag.py`**：使用者自身向量庫寫入/檢索、暱稱關聯、跨對話記憶調用與 `me` 指令

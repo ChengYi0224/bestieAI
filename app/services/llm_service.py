@@ -13,6 +13,7 @@ llm_service.py — Gemini LLM 整合服務。
 import time
 import logging
 import functools
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -31,6 +32,7 @@ EXTRACT_SELF_PROMPT_PATH = PROMPTS_DIR / "extract_self.txt"
 EXTRACT_EVENTS_PROMPT_PATH = PROMPTS_DIR / "extract_events.txt"
 CONSOLIDATE_EVENTS_PROMPT_PATH = PROMPTS_DIR / "consolidate_events.txt"
 CONSOLIDATE_CLUSTERS_BATCH_PROMPT_PATH = PROMPTS_DIR / "consolidate_clusters_batch.txt"
+CONCISE_SUMMARY_PROMPT_PATH = PROMPTS_DIR / "concise_summary.txt"
 PROMPT_TEMPLATE_PATH = SYSTEM_PROMPT_PATH
 
 # 依優先順序嘗試的模型陣列
@@ -320,16 +322,8 @@ class LLMClient:
         將全景復盤長文或長對話提煉為 300~500 字的精簡日常人物摘要卡。
         包含：關係定調、相處核心模式、主要雷點/偏好、目前應對建議。
         """
-        prompt = (
-            "你是一位專業的人際關係顧問。請根據以下這份全景歷史分析或對話內容，"
-            "提煉出一份嚴格控制在 300~500 字以內的「日常輕量人物摘要卡」。\n"
-            "這張卡片是用於日常陪聊時的快速人設邊界參考，切勿冗長，請精確包含：\n"
-            "1. 【關係定調】：雙方目前客觀關係與信任程度（50字內）\n"
-            "2. 【相處模式與風格】：互動頻率、回覆習慣、聊天氛圍（80字內）\n"
-            "3. 【關鍵雷點與偏好】：對方介意的事、喜歡的話題或相處禁忌（100字內）\n"
-            "4. 【當前應對建議】：目前與對方互動時最適合的心態或策略（80字內）\n\n"
-            f"資料來源如下：\n{full_summary_or_convs[:10000]}"
-        )
+        template = CONCISE_SUMMARY_PROMPT_PATH.read_text(encoding="utf-8")
+        prompt = template.format(content=full_summary_or_convs[:10000])
         candidates = getattr(settings, "event_extraction_models_list", None)
         return self._generate_with_fallback(prompt, preferred_model=model, candidate_models=candidates).strip()
 

@@ -105,16 +105,12 @@ Bot 回覆：先接住情緒／分析語氣／給 2-3 種回覆版本
 ┌───────────────────────────────────────────────────────────┐
 │                     本地 / 小型主機 App（Python）             │
 │                                                             │
-│  session_manager.py ── 兩個帳號的登入、2FA、session 持久化      │
-│  poller.py          ── 定期輪詢 bot 帳號收件匣，取得新訊息        │
-│  command_router.py  ── 解析指令（track/select/status/...）    │
-│  ingestion.py        ── RAG ingestion pipeline               │
-│  memory.py           ── 分層記憶讀取（近期/RAG/摘要卡）          │
-│  llm.py              ── 組 Prompt、呼叫 Claude API             │
-│  db.py               ── SQLite 讀寫                          │
-│  vector_store.py     ── 向量資料庫封裝（Chroma）                │
-│  ig_client.py        ── 封裝 instagrapi 的讀取/發送操作          │
-│  config.py           ── 讀取 .env 設定                        │
+│  app/clients/       ── 外部通訊 (Instagram Client, GeminiKeyRing)   │
+│  app/bot/           ── 入口交互 (指令 Router, Poller, 白名單 Auth)   │
+│  app/pipelines/     ── 業務管線 (事件提煉, 向量分群, 批次融合, 摘要)  │
+│  app/services/      ── 業務調度 (MemoryManager, LLMService)        │
+│  app/storage/       ── 本地存儲 (SQLite Repositories, ChromaStore)  │
+│  app/core/          ── 系統基礎 (Config, Fernet Security)          │
 │                                                             │
 └──────────┬───────────────────────────────┬─────────────────┘
            ▼                               ▼
@@ -124,23 +120,20 @@ Bot 回覆：先接住情緒／分析語氣／給 2-3 種回覆版本
            │
            ▼
   ┌─────────────────────┐
-  │      Claude API       │
+  │  Gemini API KeyRing │
   └─────────────────────┘
 ```
 
 ### 4.2 模組職責說明
 
-| 模組                   | 職責                                                              | 主要依賴                    |
-| ---------------------- | ----------------------------------------------------------------- | --------------------------- |
-| `session_manager.py` | 管理主帳號與 bot 帳號的登入、2FA 驗證碼輸入、session 序列化與還原 | instagrapi                  |
-| `poller.py`          | 定期（你手動啟動的常駐程式）檢查 bot 帳號有沒有新訊息             | instagrapi                  |
-| `command_router.py`  | 判斷訊息是否為指令，分派到對應的處理函式                          | —                          |
-| `ingestion.py`       | 抓取歷史訊息、清洗、分段、embedding、寫入向量庫、生成摘要卡       | instagrapi, embedding model |
-| `memory.py`          | 依`active_contact_id` 組合近期上下文 + RAG 搜尋結果 + 摘要卡    | —                          |
-| `llm.py`             | 組裝最終 prompt、呼叫 Claude API                                  | anthropic SDK               |
-| `db.py`              | `contacts` / `messages` / `bot_state` 表的存取              | sqlite3                     |
-| `vector_store.py`    | chunk 的 embedding 寫入、語意搜尋                                 | chromadb                    |
-| `ig_client.py`       | 封裝 instagrapi 的訊息讀取、發送                                  | instagrapi                  |
+| 模組目錄 | 主要檔案 | 職責說明 | 主要依賴 |
+| :--- | :--- | :--- | :--- |
+| **`app/clients/`** | `gemini.py`, `instagram.py` | 專責外部服務通訊：多組 API Key 輪換與 429 冷卻跳過、IG 私訊與抓取操作 | `google-genai`, `instagrapi` |
+| **`app/pipelines/`** | `extraction.py`, `clustering.py`, `consolidation.py`, `summarization.py` | 專責業務管線：對話滑動窗口切塊與事件提煉、時序 Complete Linkage 分群、多 Cluster 批次融合、人物卡與全景復盤 | 專屬 Prompt 範本, `GeminiClient` |
+| **`app/storage/`** | `db.py`, `repositories.py`, `chroma_store.py` | 本地存儲與持久化：SQLite 連線與單一事實來源、純本地 Chroma 雙軌集合操作 | `sqlite3`, `chromadb` |
+| **`app/services/`** | `memory_service.py`, `llm_service.py`, `ingestion_service.py` | 領域服務層：分層記憶多路檢索與共享向量組裝、高階流程協調器 | 各 pipelines, repositories |
+| **`app/bot/`** | `router.py`, `poller.py`, `auth.py` | 機器人交互層：宣告式指令分派與別名路由、長連接/輪詢監聽、白名單過濾 | `instagrapi` |
+| **`app/core/`** | `config.py`, `security.py` | 核心基礎設施：Pydantic 環境變數管理、Fernet Session 對稱加解密 | `pydantic-settings`, `cryptography` |
 
 ---
 

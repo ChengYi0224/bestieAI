@@ -97,9 +97,12 @@ def init_db(db_path: Optional[Path] = None) -> None:
 
 # ==================== 模組層相容輔助函式（底層轉接 Repositories） ====================
 
-def get_active_contact(db_path: Optional[Path] = None) -> Optional[sqlite3.Row]:
+def get_active_contact(contact_id: Optional[int] = None, db_path: Optional[Path] = None) -> Optional[sqlite3.Row]:
     from app.storage.repositories import ContactRepository
-    return ContactRepository(db_path).get_active()
+    repo = ContactRepository(db_path)
+    if contact_id is not None:
+        return repo.get_by_id(contact_id)
+    return repo.get_active()
 
 
 def set_active_contact_by_id(contact_id: int, db_path: Optional[Path] = None) -> bool:
@@ -191,6 +194,9 @@ def update_contact_full_history(contact_id: int, full_summary: str, db_path: Opt
     ContactRepository(db_path).update_full_history(contact_id, full_summary)
 
 
+update_full_history_summary = update_contact_full_history
+
+
 def should_update_summary(
     contact: Dict[str, Any],
     threshold: Optional[int] = None,
@@ -220,6 +226,9 @@ def should_update_summary(
 def get_all_messages(contact_id: int, db_path: Optional[Path] = None) -> List[sqlite3.Row]:
     from app.storage.repositories import MessageRepository
     return MessageRepository(db_path).get_all(contact_id)
+
+
+get_messages = get_all_messages
 
 
 def set_contact_nickname(contact_id: int, nickname: Optional[str], db_path: Optional[Path] = None) -> bool:

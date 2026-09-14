@@ -22,8 +22,18 @@ class Settings(BaseSettings):
     # Session 對稱加密金鑰 (Fernet 32-byte base64)；若未設定則自動保存於 data/.session_key
     SESSION_ENCRYPTION_KEY: str = ""
 
-    # Google Gemini API Key
+    # Google Gemini API Key（支援單一金鑰或多組金鑰逗號分隔）
     GEMINI_API_KEY: str = ""
+    GEMINI_API_KEYS: str = ""
+
+    @property
+    def api_keys_list(self) -> list[str]:
+        """優先解析 GEMINI_API_KEYS（逗號分隔），若未提供則退回 GEMINI_API_KEY。"""
+        if self.GEMINI_API_KEYS:
+            return [k.strip() for k in self.GEMINI_API_KEYS.split(",") if k.strip()]
+        if self.GEMINI_API_KEY:
+            return [self.GEMINI_API_KEY.strip()]
+        return []
 
     # ==================== 檔案與目錄路徑 ====================
     # SQLite 資料庫檔案路徑
