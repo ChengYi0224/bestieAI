@@ -1,16 +1,17 @@
-from typing import Optional, Dict, Any, Tuple
-from app.db import get_active_contact, get_recent_messages
+from typing import Optional, Dict, Any, Tuple, List
+from app.db import get_active_contact, get_recent_messages, get_bot_conversations
 from app.vectors import VectorStore
+from app.config import settings
 
 
 class MemoryManager:
     def __init__(self, vector_store: Optional[VectorStore] = None):
         self.vector_store = vector_store or VectorStore()
 
-    def get_full_context(self, user_query: str) -> Tuple[Optional[Dict[str, Any]], str, str, str]:
+    def get_full_context(self, user_query: str) -> Tuple[Optional[Dict[str, Any]], str, str, str, str]:
         contact = get_active_contact()
         if not contact:
-            return None, "", "", ""
+            return None, "", "", "", ""
 
         contact_dict = dict(contact)
         contact_id = contact_dict["id"]
@@ -29,4 +30,16 @@ class MemoryManager:
         except Exception:
             rag_chunks_str = "（向量檢索暫不可用）"
 
-        return contact_dict, summary_card, rag_chunks_str, recent_context_str
+        # 讀取最近 N 輪 bot 對話歷史（user/assistant 各一筆算一輪，取 turns*2 筆）
+        turns = settings.CHAT_HISTORY_TURNS
+        bot_convs = get_bot_conversations(contact_id=contact_id, limit=turns * 2)
+        if bot_convs:
+            chat_history_str = "\n".join(
+                f"{'你' if row['role'] == 'user' else 'AI'}: {row['content']}"
+                for row in bot_convs
+            )
+        else:
+            chat_history_str = ""
+
+        return contact_dict, summary_card, rag_chunks_str, recent_context_str, chat_history_str
+

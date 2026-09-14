@@ -17,6 +17,9 @@ def test_router_commands(router, tmp_path):
     res = router.handle_message("track bob_123")
     assert res == "TRACK_REQUEST:bob_123"
 
+    res_full = router.handle_message("track_full bob_123 2000")
+    assert res_full == "TRACK_FULL_REQUEST:bob_123:2000"
+
     res = router.handle_message("select bob_123")
     assert "找不到" in res or "目前作用對象" in res
 
@@ -26,8 +29,14 @@ def test_router_commands(router, tmp_path):
     res = router.handle_message("status")
     assert "尚未選定" in res or "目前對話對象狀態" in res
 
+    res_q = router.handle_message("query")
+    assert "尚未選定" in res_q or "目前對話對象狀態" in res_q
+
     res = router.handle_message("refresh_summary bob_123")
     assert res == "REFRESH_SUMMARY_REQUEST:bob_123"
+
+    res = router.handle_message("summarize_history bob_123")
+    assert res == "SUMMARIZE_HISTORY_REQUEST:bob_123"
 
     res = router.handle_message("sync bob_123")
     assert res == "SYNC_REQUEST:bob_123"
@@ -41,3 +50,103 @@ def test_router_commands(router, tmp_path):
     err_res = router.handle_message("track")
     assert "格式錯誤" in err_res
     assert "help" in err_res
+
+
+def test_select_fuzzy_matching(tmp_path):
+    db_file = tmp_path / "test_fuzzy.db"
+    init_db(db_file)
+    router = CommandRouter(memory_manager=MagicMock(), llm_client=MagicMock(), db_path=db_file)
+
+    # 建立兩個聯絡人：一個包含 syun，另一個也包含 syun
+    get_or_create_contact("sample_user_01", "Syun", db_path=db_file)
+    get_or_create_contact("syun_friend", "Syun Friend", db_path=db_file)
+    get_or_create_contact("alice_w", "Alice", db_path=db_file)
+
+    # 1. 單一吻合模糊查詢（例如 "alice"）
+    res_single = router.handle_message("select alice")
+    assert "目前作用對象已切換為：alice_w" in res_single
+
+    # 2. 完全相等的精準查詢（例如 "sample_user_01"）即便多個包含 syun 也直接切換
+    res_exact = router.handle_message("select sample_user_01")
+    assert "目前作用對象已切換為：sample_user_01" in res_exact
+
+    # 3. 多重候選查詢（例如 "syun" 匹配 2 個）
+    res_multi = router.handle_message("select syun")
+    assert "找到 2 個符合「syun」的對象" in res_multi
+    assert "1. syun" in res_multi
+    assert "2. syun" in res_multi
+    assert "直接回傳數字如 1" in res_multi
+
+    # 4. 回傳數字 1 確認切換
+    res_choice = router.handle_message("1")
+    assert "已確認！目前作用對象切換為：" in res_choice
+
+
+def test_status_and_query_worker_progress(tmp_path):
+    import time
+    from app.db import init_db, set_worker_status
+
+    db_file = tmp_path / "test_worker.db"
+    init_db(db_file)
+    router = CommandRouter(memory_manager=MagicMock(), llm_client=MagicMock(), db_path=db_file)
+
+    # 模擬背景爬蟲正在執行
+    set_worker_status({
+        "running": True,
+        "target": "syun_test",
+        "mode": "安全慢速全量抓取",
+        "pages": 12,
+        "count": 240,
+        "start_time": time.time() - 300
+    }, db_path=db_file)
+
+    res = router.handle_message("query")
+    assert "背景抓取中" in res
+    assert "syun_test" in res
+    assert "第 12 頁" in res
+    assert "240 則" in res
+
+    # 模擬背景爬蟲已結束
+    set_worker_status({
+        "running": False,
+        "target": "syun_test"
+    }, db_path=db_file)
+
+    res_done = router.handle_message("status")
+    assert "無執行中任務" in res_done
+
+
+def test_chat_history_in_reply(tmp_path):
+    from unittest.mock import MagicMock, call
+    from app.db import init_db, get_or_create_contact, add_bot_conversation, set_active_contact
+    from app.router import CommandRouter
+
+    db_file = tmp_path / "chat_history_test.db"
+    init_db(db_file)
+
+    contact_id = get_or_create_contact("test_user", db_path=db_file)
+    set_active_contact("test_user", db_path=db_file)
+
+    # 預先寫入兩輪舊對話
+    add_bot_conversation(role="user", content="他說今天不想聊", contact_id=contact_id, db_path=db_file)
+    add_bot_conversation(role="assistant", content="可能他只是累了，不一定是針對你", contact_id=contact_id, db_path=db_file)
+
+    mock_memory = MagicMock()
+    mock_memory.get_full_context.return_value = (
+        {"id": contact_id, "display_name": "test", "ig_account_id": "test_user"},
+        "摘要卡內容",
+        "RAG chunks",
+        "近期訊息",
+        "你: 他說今天不想聊\nAI: 可能他只是累了，不一定是針對你"
+    )
+    mock_llm = MagicMock()
+    mock_llm.generate_reply.return_value = "好，那你現在怎麼想？"
+
+    router = CommandRouter(memory_manager=mock_memory, llm_client=mock_llm, db_path=db_file)
+    reply = router.handle_message("那我應該繼續追嗎")
+
+    # 確認 generate_reply 有收到 chat_history
+    call_kwargs = mock_llm.generate_reply.call_args.kwargs
+    assert "chat_history" in call_kwargs
+    assert "他說今天不想聊" in call_kwargs["chat_history"]
+    assert reply == "好，那你現在怎麼想？"

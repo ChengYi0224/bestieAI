@@ -10,10 +10,11 @@
 | IG 存取 | `instagrapi`（非官方私有 API，含 Session 加密持久化） |
 | 訊息監聽 | MQTT Realtime 長連接（被動接收推播，降低風控風險） |
 | 向量資料庫 | ChromaDB（本地檔案模式） |
-| Embedding | Gemini `text-embedding-004`（免費） |
-| LLM | Gemini `gemini-3.8-flash` |
+| Embedding | Gemini `gemini-embedding-2`（免費） |
+| LLM | Gemini 多模型自動容錯降級陣列（`3.8-flash` → `3.7-flash` → `3.6-flash` → `3.5-flash-lite`） |
 | 關聯式儲存 | SQLite |
 | Session 加密 | `cryptography.fernet` 對稱加密 |
+| 日誌紀錄 | 獨立 `logs/llm.log` 結構化記錄每次 Prompt 輸入與生成結果/耗時 |
 
 > **⚠️ 風險聲明**：本服務透過帳密直接模擬 IG App 登入，違反 Meta ToS，兩帳號均有被風控或封鎖風險。請妥善保管憑證，並以個人實驗性工具的心態使用。
 
@@ -43,6 +44,8 @@ cp .env.example .env
 | `BOT_ACCOUNT_PASSWORD` | Bot 帳號密碼 |
 | `SESSION_ENCRYPTION_KEY` | Fernet 金鑰，以下指令一鍵產生：`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 | `GEMINI_API_KEY` | Google Gemini API Key（Embedding + LLM 回覆共用） |
+| `GEMINI_EMBEDDING_MODEL` | （選填）Embedding 模型名稱，預設 `gemini-embedding-2` |
+| `GEMINI_CANDIDATE_MODELS` | （選填）LLM 候選模型陣列，以逗號分隔，預設 `gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite` |
 
 ### 3. 執行單元測試
 
@@ -67,10 +70,13 @@ uv run python main.py
 | 指令 | 說明 |
 |---|---|
 | `track <IG_ID>` | 首次追蹤：爬取近一個月對話、向量化、生成初始人物關係摘要卡 |
-| `select <IG_ID>` | 切換目前討論對象（純本地操作，不動 IG API） |
+| `track_full [IG_ID] [上限]` | 安全慢速全量抓取：自動去重、防風控深層休眠、自動重構向量與全局摘要卡 |
+| `select <關鍵字>` | 切換目前討論對象（支援模糊比對；多重結果時回傳數字即可切換） |
 | `sync [IG_ID]` | 增量同步最新訊息並寫入向量庫；累積達 50 則自動更新摘要卡 |
-| `refresh_summary [IG_ID]` | 強制以最新對話重新生成人物關係摘要卡 |
-| `status` | 顯示目前對象的追蹤狀態、上次同步時間與未摘要訊息數 |
+| `rebuild_vectors [IG_ID]` | 從本地資料庫重建向量庫（**不需重新爬 IG**，專為 embedding 失敗後修復使用） |
+| `summarize_history [IG_ID]` | **全景關係深度復盤**：以自始至終完整歷史對話（不取樣）建立長期人物全貌與走向摘要卡 |
+| `refresh_summary [IG_ID]` | 強制以近期對話增量刷新人物關係摘要卡 |
+| `status`（或 `query`） | 顯示目前對象的追蹤狀態，若有背景全量爬蟲正在執行，同步顯示即時爬取頁數與訊息進度 |
 | `list` | 列出所有已追蹤對象 |
 | `untrack <IG_ID>` | 標記為停止追蹤（保留資料，不刪除） |
 | `help`（或 `h` / `?` / `指令`） | 查詢所有可用指令說明與格式 |
@@ -112,15 +118,20 @@ uv run python main.py
        │
        ├─ track <IG_ID>
        │      ├─ 登入大帳（首次或 Session 失效時，支援 2FA）
-       │      ├─ 爬取與目標近一個月對話（每頁加隨機延遲）
+       │      ├─ 爬取與目標近一個月對話（分頁間隨機延遲 2~5 秒）
        │      ├─ 訊息清洗＋按天/數量切 chunks
-       │      ├─ Gemini text-embedding-004 向量化 → 寫入 ChromaDB
+       │      ├─ Gemini gemini-embedding-2 向量化 → 寫入 ChromaDB
        │      └─ Gemini gemini-3.8-flash 生成初始人物關係摘要卡 → 寫入 SQLite
        │
        ├─ sync [IG_ID]
        │      ├─ 只抓自上次同步後的新訊息（增量，不重跑）
        │      ├─ 向量化並寫入 ChromaDB
        │      └─ 若新訊息累積 ≥ 50 則：呼叫 Gemini 增量更新摘要卡
+       │
+       ├─ rebuild_vectors [IG_ID]
+       │      ├─ 讀取 SQLite 中已存的全部訊息（不打 IG API）
+       │      ├─ 清除該對象舊有 ChromaDB 向量
+       │      └─ 重新 chunk → Embedding → 寫入 ChromaDB（適合 embedding 失敗後修復）
        │
        ├─ select / status / list / untrack
        │      └─ 純本地 SQLite 操作
@@ -139,3 +150,4 @@ uv run python main.py
 [保底排程] ── 每小時 Ping 維持 MQTT 連線時順帶檢查
        └─ 若任一追蹤對象距上次摘要更新 ≥ 14 天且有新訊息 → 自動觸發增量更新
 ```
+

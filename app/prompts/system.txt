@@ -15,5 +15,8 @@
 [近期上下文]
 {recent_context}
 
+[本輪對話歷史]
+{chat_history}
+
 [使用者現在說]
 {user_query}

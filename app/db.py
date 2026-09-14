@@ -17,6 +17,16 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
 def init_db(db_path: Optional[Path] = None) -> None:
     conn = get_connection(db_path)
     with conn:
+        # 平滑遷移：為現有 bot_state 補足 pending_selection 與 worker_status 欄位
+        try:
+            conn.execute("ALTER TABLE bot_state ADD COLUMN pending_selection TEXT;")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE bot_state ADD COLUMN worker_status TEXT;")
+        except sqlite3.OperationalError:
+            pass
+
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS contacts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,6 +54,8 @@ def init_db(db_path: Optional[Path] = None) -> None:
         CREATE TABLE IF NOT EXISTS bot_state (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             active_contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
+            pending_selection TEXT,
+            worker_status TEXT,
             updated_at DATETIME
         );
 
@@ -55,8 +67,8 @@ def init_db(db_path: Optional[Path] = None) -> None:
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
 
-        INSERT OR IGNORE INTO bot_state (id, active_contact_id, updated_at)
-        VALUES (1, NULL, CURRENT_TIMESTAMP);
+        INSERT OR IGNORE INTO bot_state (id, active_contact_id, pending_selection, worker_status, updated_at)
+        VALUES (1, NULL, NULL, NULL, CURRENT_TIMESTAMP);
         """)
     conn.close()
 
@@ -74,6 +86,26 @@ def get_active_contact(db_path: Optional[Path] = None) -> Optional[sqlite3.Row]:
     return row
 
 
+def set_active_contact_by_id(contact_id: int, db_path: Optional[Path] = None) -> bool:
+    conn = get_connection(db_path)
+    found = False
+    try:
+        with conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM contacts WHERE id = ?", (contact_id,))
+            contact = cursor.fetchone()
+            if contact:
+                found = True
+                cursor.execute("""
+                    UPDATE bot_state
+                    SET active_contact_id = ?, pending_selection = NULL, updated_at = ?
+                    WHERE id = 1
+                """, (contact["id"], datetime.utcnow().isoformat()))
+    finally:
+        conn.close()
+    return found
+
+
 def set_active_contact(ig_account_id: str, db_path: Optional[Path] = None) -> bool:
     conn = get_connection(db_path)
     found = False
@@ -86,12 +118,86 @@ def set_active_contact(ig_account_id: str, db_path: Optional[Path] = None) -> bo
                 found = True
                 cursor.execute("""
                     UPDATE bot_state
-                    SET active_contact_id = ?, updated_at = ?
+                    SET active_contact_id = ?, pending_selection = NULL, updated_at = ?
                     WHERE id = 1
                 """, (contact["id"], datetime.utcnow().isoformat()))
     finally:
         conn.close()
     return found
+
+
+def search_contacts_fuzzy(query: str, db_path: Optional[Path] = None) -> List[sqlite3.Row]:
+    """
+    支援大小寫不敏感的模糊比對（比對 ig_account_id 或 display_name）。
+    若有完全相等的結果，優先排在第一位。
+    """
+    clean_q = query.strip()
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT * FROM contacts
+        WHERE ig_account_id LIKE ? OR display_name LIKE ?
+        ORDER BY
+            CASE WHEN LOWER(ig_account_id) = LOWER(?) THEN 0
+                 WHEN LOWER(display_name) = LOWER(?) THEN 1
+                 ELSE 2 END,
+            id DESC
+    """, (f"%{clean_q}%", f"%{clean_q}%", clean_q, clean_q))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+
+def set_pending_selection(candidate_ids: List[int], db_path: Optional[Path] = None) -> None:
+    """暫存多重搜尋結果的 contact_id 清單 (以逗號分隔)。"""
+    import json
+    val = json.dumps(candidate_ids) if candidate_ids else None
+    conn = get_connection(db_path)
+    with conn:
+        conn.execute("UPDATE bot_state SET pending_selection = ? WHERE id = 1", (val,))
+    conn.close()
+
+
+def get_pending_selection(db_path: Optional[Path] = None) -> Optional[List[int]]:
+    """讀取當前暫存的候選對象清單。"""
+    import json
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT pending_selection FROM bot_state WHERE id = 1")
+    row = cursor.fetchone()
+    conn.close()
+    if row and row["pending_selection"]:
+        try:
+            return json.loads(row["pending_selection"])
+        except Exception:
+            return None
+    return None
+
+
+def set_worker_status(status_info: Optional[Dict[str, Any]], db_path: Optional[Path] = None) -> None:
+    """儲存或清除背景工作（如全量爬取）的即時進度狀態。"""
+    import json
+    val = json.dumps(status_info, ensure_ascii=False) if status_info else None
+    conn = get_connection(db_path)
+    with conn:
+        conn.execute("UPDATE bot_state SET worker_status = ?, updated_at = ? WHERE id = 1", (val, datetime.utcnow().isoformat()))
+    conn.close()
+
+
+def get_worker_status(db_path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    """讀取當前正在運行的背景工作進度狀態。"""
+    import json
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT worker_status FROM bot_state WHERE id = 1")
+    row = cursor.fetchone()
+    conn.close()
+    if row and row["worker_status"]:
+        try:
+            return json.loads(row["worker_status"])
+        except Exception:
+            return None
+    return None
 
 
 def get_or_create_contact(
@@ -174,6 +280,24 @@ def add_bot_conversation(role: str, content: str, contact_id: Optional[int] = No
     conn.close()
 
 
+def get_bot_conversations(contact_id: Optional[int], limit: int = 20, db_path: Optional[Path] = None) -> List[sqlite3.Row]:
+    """取最近 limit 筆 bot 對話紀錄（user/assistant 各算一筆），依時間正序回傳。"""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT role, content FROM (
+            SELECT role, content, created_at
+            FROM bot_conversations
+            WHERE contact_id IS ? OR (? IS NULL AND contact_id IS NULL)
+            ORDER BY created_at DESC
+            LIMIT ?
+        ) ORDER BY created_at ASC
+    """, (contact_id, contact_id, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+
 def get_contact_by_id(contact_id: int, db_path: Optional[Path] = None) -> Optional[sqlite3.Row]:
     conn = get_connection(db_path)
     cursor = conn.cursor()
@@ -231,3 +355,16 @@ def should_update_summary(contact: Dict[str, Any], threshold: int = 50, days_lim
         pass
 
     return False
+
+
+def get_all_messages(contact_id: int, db_path: Optional[Path] = None) -> List[sqlite3.Row]:
+    """回傳該對象所有訊息（按時間升冪），供 rebuild_vectors 重建向量庫使用。"""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT * FROM messages WHERE contact_id = ? ORDER BY sent_at ASC",
+        (contact_id,)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return rows

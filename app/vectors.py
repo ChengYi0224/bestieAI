@@ -3,12 +3,13 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 from google import genai
 from app.config import settings
-
+from app.rate_limit import gemini_retry
 
 class VectorStore:
-    def __init__(self, chroma_path: Optional[Path] = None):
+    def __init__(self, chroma_path: Optional[Path] = None, embedding_model: Optional[str] = None):
         path = chroma_path or settings.CHROMA_PATH
         path.mkdir(parents=True, exist_ok=True)
+        self.embedding_model = embedding_model or settings.GEMINI_EMBEDDING_MODEL
         self.client = chromadb.PersistentClient(path=str(path))
         self.collection = self.client.get_or_create_collection(
             name="chat_chunks",
@@ -24,9 +25,10 @@ class VectorStore:
             self._genai_client = genai.Client(api_key=settings.GEMINI_API_KEY)
         return self._genai_client
 
+    @gemini_retry(max_short_retries=3, base_delay=10.0)
     def get_embedding(self, text: str) -> List[float]:
         response = self.genai_client.models.embed_content(
-            model="text-embedding-004",
+            model=self.embedding_model,
             contents=text
         )
         return response.embeddings[0].values
