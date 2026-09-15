@@ -140,19 +140,35 @@ class BotPoller:
                 "last_update": datetime.utcnow().isoformat()
             })
 
-            def on_full_progress(count: int, pages: int):
-                set_worker_status({
-                    "running": True,
-                    "target": target,
-                    "mode": "全量抓取",
-                    "max_amount": max_amt,
-                    "start_time": start_ts,
-                    "pages": pages,
-                    "count": count,
-                    "queue": self._get_queued_targets(),
-                    "last_update": datetime.utcnow().isoformat()
-                })
-                logger.info(f"[Worker] {target} 慢速爬取進度：第 {pages} 頁，累計 {count} 則")
+            def on_full_progress(*args, **kwargs):
+                if len(args) == 2 and isinstance(args[0], int) and isinstance(args[1], int):
+                    count, pages = args
+                    set_worker_status({
+                        "running": True,
+                        "target": target,
+                        "mode": "全量抓取",
+                        "max_amount": max_amt,
+                        "start_time": start_ts,
+                        "pages": pages,
+                        "count": count,
+                        "detail": f"爬取歷史私訊中: 第 {pages} 頁 (累計 {count} 則)",
+                        "queue": self._get_queued_targets(),
+                        "last_update": datetime.utcnow().isoformat()
+                    })
+                    logger.info(f"[Worker] {target} 慢速爬取進度：第 {pages} 頁，累計 {count} 則")
+                elif len(args) >= 1 and isinstance(args[0], str):
+                    detail_msg = args[0]
+                    set_worker_status({
+                        "running": True,
+                        "target": target,
+                        "mode": "全量抓取",
+                        "max_amount": max_amt,
+                        "start_time": start_ts,
+                        "detail": detail_msg,
+                        "queue": self._get_queued_targets(),
+                        "last_update": datetime.utcnow().isoformat()
+                    })
+                    logger.info(f"[Worker] {target} 全量抓取進度：{detail_msg}")
 
             try:
                 if self.main_ig is None:
@@ -329,13 +345,26 @@ class BotPoller:
                     "detail": "正統整全量歷史對話並提煉深度長文中...",
                     "last_update": datetime.utcnow().isoformat()
                 })
+
+                def on_summary_progress(detail_msg: str):
+                    set_worker_status({
+                        "running": True,
+                        "target": target,
+                        "mode": "全景復盤分析",
+                        "start_time": start_ts,
+                        "detail": detail_msg,
+                        "last_update": datetime.utcnow().isoformat()
+                    })
+                    logger.info(f"[Summary Progress] {target}: {detail_msg}")
+
                 try:
-                    info = self.ingestion.build_full_history_summary(target)
+                    info = self.ingestion.build_full_history_summary(target, progress_callback=on_summary_progress)
                     elapsed_min = int((time.time() - start_ts) // 60)
                     set_worker_status({
                         "running": False,
                         "target": target,
-                        "completed_at": datetime.utcnow().isoformat()
+                        "completed_at": datetime.utcnow().isoformat(),
+                        "detail": f"全景復盤完成 (共 {info['total_messages']} 則對話)"
                     })
                     reply_text = (
                         f"【{target} 全景關係復盤完成】（共 {info['total_messages']} 則對話，耗時約 {elapsed_min} 分鐘）\n\n"
@@ -363,6 +392,14 @@ class BotPoller:
         elif result.startswith("SYNC_REQUEST:"):
             target = result.split(":", 1)[1]
             self.bot_ig.send_message(thread_id, f"同步 {target} 最新訊息中...")
+            set_worker_status({
+                "running": True,
+                "target": target,
+                "mode": "增量同步",
+                "start_time": time.time(),
+                "detail": f"正在同步 {target} 最新私訊...",
+                "last_update": datetime.utcnow().isoformat()
+            })
             try:
                 if self.main_ig is None:
                     main_client = self.session_manager.login("main")
@@ -370,9 +407,21 @@ class BotPoller:
                 sync_info = self.ingestion.sync_messages(self.main_ig, target)
                 summary_msg = "（摘要卡已更新）" if sync_info["summary_updated"] else ""
                 reply_text = f"同步完成：新增 {sync_info['new_messages_count']} 則訊息，提煉 {sync_info['chunks_added']} 條事件記憶。{summary_msg}"
+                set_worker_status({
+                    "running": False,
+                    "target": target,
+                    "completed_at": datetime.utcnow().isoformat(),
+                    "detail": f"同步完成: 新增 {sync_info['new_messages_count']} 則訊息"
+                })
             except Exception as ex:
                 logger.error(f"同步失敗: {ex}")
                 reply_text = f"同步 {target} 失敗: {ex}"
+                set_worker_status({
+                    "running": False,
+                    "target": target,
+                    "error": str(ex),
+                    "failed_at": datetime.utcnow().isoformat()
+                })
             self.bot_ig.send_message(thread_id, reply_text)
 
         elif result.startswith("REBUILD_VECTORS_REQUEST:"):
@@ -391,16 +440,29 @@ class BotPoller:
                     "target": target,
                     "mode": "重建向量庫",
                     "start_time": start_ts,
-                    "detail": "進行時間切塊與事件提煉中...",
+                    "detail": "準備讀取本地歷史對話紀錄...",
                     "last_update": datetime.utcnow().isoformat()
                 })
+
+                def on_rebuild_progress(detail_msg: str):
+                    set_worker_status({
+                        "running": True,
+                        "target": target,
+                        "mode": "重建向量庫",
+                        "start_time": start_ts,
+                        "detail": detail_msg,
+                        "last_update": datetime.utcnow().isoformat()
+                    })
+                    logger.info(f"[Rebuild Progress] {target}: {detail_msg}")
+
                 try:
-                    info = self.ingestion.rebuild_vectors(target)
+                    info = self.ingestion.rebuild_vectors(target, progress_callback=on_rebuild_progress)
                     elapsed_min = int((time.time() - start_ts) // 60)
                     set_worker_status({
                         "running": False,
                         "target": target,
-                        "completed_at": datetime.utcnow().isoformat()
+                        "completed_at": datetime.utcnow().isoformat(),
+                        "detail": f"重建完成 (共 {info['chunks_rebuilt']} 條記憶)"
                     })
                     reply_text = (
                         f"【{target} 向量庫重建完成】（耗時約 {elapsed_min} 分鐘）\n"

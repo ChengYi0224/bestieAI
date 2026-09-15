@@ -78,12 +78,22 @@ def test_memory_manager_self_rag(tmp_path):
 
 
 def test_llm_extract_self_info():
+    from app.services.llm_service import DEFAULT_SELF_EXTRACT_MODEL
     client = LLMClient(api_key="mock_key")
     
-    # 測試萃取出具體資訊
+    # 測試萃取出具體資訊，並驗證預設模型為 DEFAULT_SELF_EXTRACT_MODEL
     client._generate_with_fallback = MagicMock(return_value="- 使用者最近在準備托福考試")
     res = client.extract_self_info("我最近在準備托福，好累喔")
     assert res == "- 使用者最近在準備托福考試"
+    client._generate_with_fallback.assert_called_once()
+    _, kwargs = client._generate_with_fallback.call_args
+    assert kwargs.get("preferred_model") == DEFAULT_SELF_EXTRACT_MODEL
+    assert DEFAULT_SELF_EXTRACT_MODEL == "gemini-3.5-flash-lite"
+
+    # 測試模型若回傳 * 或 • 條列時，會自動正規化為 -
+    client._generate_with_fallback = MagicMock(return_value="* 使用者換了新工作\n• 下週準備去日本")
+    res_normalized = client.extract_self_info("我換了新工作，下週要去日本玩")
+    assert res_normalized == "- 使用者換了新工作\n- 下週準備去日本"
 
     # 測試無資訊輸出「無」
     client._generate_with_fallback = MagicMock(return_value="無")

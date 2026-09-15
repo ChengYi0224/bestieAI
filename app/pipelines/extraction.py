@@ -107,6 +107,7 @@ class EventExtractor:
         self,
         messages: List[Dict[str, Any]],
         contact_id: Optional[int] = None,
+        progress_callback: Optional[Any] = None,
         db_path: Optional[Any] = None
     ) -> List[Dict[str, Any]]:
         """執行切塊與事件提煉，每批次即時增量落盤。"""
@@ -123,6 +124,11 @@ class EventExtractor:
             f"對話歷史共 {total_messages} 則訊息，切分為 {total_batches} 個時間感知批次"
             f"（目標 {self.target_batch_size} 則/批，重疊 {self.overlap_size} 則）"
         )
+        if progress_callback:
+            try:
+                progress_callback(f"對話共 {total_messages} 則，切分為 {total_batches} 個批次，開始提煉事件...")
+            except Exception:
+                pass
 
         # 載入現有 raw 快取，支援斷點續傳
         existing_raw = []
@@ -156,8 +162,20 @@ class EventExtractor:
             if cache_key in cached_batch_map:
                 hits = cached_batch_map[cache_key]
                 event_chunks.extend(hits)
+                msg = f"提煉事件中: 批次 {b_idx + 1}/{total_batches} (快取命中，跳過 API 呼叫，累計 {len(event_chunks)} 條)"
                 logger.info(f"批次 {b_idx + 1}/{total_batches} 已有本機快取 ({len(hits)} 條事件，涵蓋 {len(batch)} 則訊息)，跳過呼叫")
+                if progress_callback:
+                    try:
+                        progress_callback(msg)
+                    except Exception:
+                        pass
                 continue
+
+            if progress_callback:
+                try:
+                    progress_callback(f"提煉事件中: 批次 {b_idx + 1}/{total_batches} (處理 {len(batch)} 則訊息，目前累計 {len(event_chunks)} 條)...")
+                except Exception:
+                    pass
 
             formatted_lines = []
             for m in batch:
@@ -203,6 +221,12 @@ class EventExtractor:
                     )
                 except Exception as e:
                     logger.warning(f"即時落盤失敗 (非致命): {e}")
+
+            if progress_callback:
+                try:
+                    progress_callback(f"提煉事件中: 批次 {b_idx + 1}/{total_batches} 完成 (累計 {len(event_chunks)} 條事件)")
+                except Exception:
+                    pass
 
             if b_idx < total_batches - 1 and pacing > 0:
                 time.sleep(pacing)

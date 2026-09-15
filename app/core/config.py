@@ -83,6 +83,9 @@ class Settings(BaseSettings):
         default="gemini-3.5-flash-lite,gemini-3.1-flash-lite"
     )
 
+    # 自身記憶萃取 (extract_self_info) 專用預設模型（優先使用輕量 flash-lite 模型）
+    GEMINI_SELF_EXTRACT_MODEL: str = Field(default="gemini-3.5-flash-lite")
+
     # ==================== 記憶組裝與 RAG 檢索參數 ====================
     # 組裝提示詞時，載入與目前對象在 IG 上的近期原始對話則數
     RECENT_MESSAGES_LIMIT: int = Field(default=30)

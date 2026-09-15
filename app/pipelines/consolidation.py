@@ -26,7 +26,11 @@ class EventConsolidator:
         self.gemini_client = gemini_client or GeminiClient()
         self.batch_size = batch_size
 
-    def consolidate(self, clusters: List[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    def consolidate(
+        self,
+        clusters: List[List[Dict[str, Any]]],
+        progress_callback: Optional[Any] = None
+    ) -> List[Dict[str, Any]]:
         """
         對所有分群結果進行無損融合：
         - 單條群組：直接放行保留（0 次 API 呼叫）。
@@ -45,11 +49,18 @@ class EventConsolidator:
         if not multi_clusters:
             return final_chunks
 
+        total_multi = len(multi_clusters)
         pacing = getattr(settings, "GEMINI_PACING_DELAY", 4.2)
         template = PROMPT_PATH.read_text(encoding="utf-8")
 
-        for batch_start in range(0, len(multi_clusters), self.batch_size):
+        for batch_start in range(0, total_multi, self.batch_size):
             chunk_group = multi_clusters[batch_start:batch_start + self.batch_size]
+            end_idx = min(batch_start + len(chunk_group), total_multi)
+            if progress_callback:
+                try:
+                    progress_callback(f"同質事件融合中: 第 {batch_start + 1}~{end_idx}/{total_multi} 群...")
+                except Exception:
+                    pass
 
             # 2. 自己組裝多群組 XML 結構 Payload
             payload_blocks = []
@@ -61,7 +72,7 @@ class EventConsolidator:
                 payload_blocks.append(f'<cluster id="{cid}">\n{ev_lines}\n</cluster>')
 
             prompt = template.format(clusters_payload="\n\n".join(payload_blocks))
-            logger.info(f"批次打包融合 {len(chunk_group)} 個同主題群組 (進度 {batch_start + 1}~{batch_start + len(chunk_group)}/{len(multi_clusters)})...")
+            logger.info(f"批次打包融合 {len(chunk_group)} 個同主題群組 (進度 {batch_start + 1}~{end_idx}/{total_multi})...")
 
             try:
                 raw_output = self.gemini_client.generate_text(

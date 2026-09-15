@@ -43,6 +43,9 @@ CANDIDATE_MODELS: List[str] = [
     "gemini-3.5-flash-lite",
 ]
 
+# 自身記憶萃取 (extract_self_info) 預設專用模型（優先使用 500 RPD 輕量穩定模型）
+DEFAULT_SELF_EXTRACT_MODEL: str = getattr(settings, "GEMINI_SELF_EXTRACT_MODEL", "gemini-3.5-flash-lite")
+
 _llm_file_handler: Optional[logging.FileHandler] = None
 
 
@@ -238,10 +241,28 @@ class LLMClient:
         """從使用者提問中萃取自身生活近況、事實、習慣或偏好。若無則回傳空字串。"""
         template = EXTRACT_SELF_PROMPT_PATH.read_text(encoding="utf-8")
         prompt = template.format(user_query=user_query)
-        result = self._generate_with_fallback(prompt, preferred_model=model).strip()
+        target_model = model or DEFAULT_SELF_EXTRACT_MODEL
+        result = self._generate_with_fallback(prompt, preferred_model=target_model).strip()
         if not result or result == "無" or result.startswith("無。") or result.startswith("無\n"):
             return ""
-        return result
+
+        # 嚴格正規化輸出：每條事實獨立一行，確保一律以「- 」條列
+        normalized_lines = []
+        for line in result.splitlines():
+            line = line.strip()
+            if not line or line in ("無", "無。", "無新增事實"):
+                continue
+            if line.startswith(("- ", "• ", "* ")):
+                line = "- " + line[2:].strip()
+            elif line.startswith(("-", "•", "*")):
+                line = "- " + line[1:].strip()
+            elif re.match(r"^\d+\.\s*", line):
+                line = "- " + re.sub(r"^\d+\.\s*", "", line)
+            else:
+                line = "- " + line
+            normalized_lines.append(line)
+
+        return "\n".join(normalized_lines)
 
     def extract_events(self, conversations_text: str, model: Optional[str] = None) -> List[str]:
         """

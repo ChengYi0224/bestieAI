@@ -10,6 +10,7 @@ router.py — 宣告式指令路由與訊息調度中心。
 import re
 import time
 import threading
+from datetime import datetime
 from typing import Optional, Tuple, Any, Callable, Dict, List
 
 from app.core.config import settings
@@ -24,6 +25,7 @@ from app.storage.db import (
     get_pending_selection,
     get_contact_by_id,
     get_worker_status,
+    set_worker_status,
     set_contact_nickname,
     get_contacts_with_nickname,
 )
@@ -200,14 +202,14 @@ class CommandRouter:
             elapsed_min = int((time.time() - w_status.get("start_time", time.time())) // 60)
             queue_str = f"\n排隊中: {', '.join(w_status.get('queue', []))}" if w_status.get('queue') else ""
 
-            if w_status.get("pages") is not None:
-                progress_str = f"進度: 第 {w_status.get('pages', 0)} 頁 ({w_status.get('count', 0)} 則)"
-            elif detail:
+            if detail:
                 progress_str = f"進度: {detail}"
+            elif w_status.get("pages") is not None:
+                progress_str = f"進度: 第 {w_status.get('pages', 0)} 頁 ({w_status.get('count', 0)} 則)"
             else:
                 progress_str = f"進度: 處理中"
 
-            title = "【背景抓取中】" if (w_status.get("pages") is not None or "抓取" in mode) else f"【{mode}執行中】"
+            title = "【背景抓取中】" if ("抓取" in mode and w_status.get("pages") is not None and not (detail and "重建" in detail)) else f"【{mode}執行中】"
             worker_section = (
                 f"{title}\n"
                 f"對象: {target}\n"
@@ -435,12 +437,32 @@ class CommandRouter:
 
         # 背景非同步萃取使用者自身相關資訊並寫入記憶
         def _async_extract():
+            w_status = get_worker_status(db_path=self.db_path)
+            is_idle = not (w_status and w_status.get("running"))
+            if is_idle:
+                set_worker_status({
+                    "running": True,
+                    "target": "user_self",
+                    "mode": "自身偏好記憶萃取",
+                    "detail": "正在非同步分析並萃取對話中的個人偏好事實...",
+                    "start_time": time.time(),
+                    "last_update": datetime.utcnow().isoformat()
+                }, db_path=self.db_path)
+
             try:
                 extracted = self.llm_client.extract_self_info(user_text)
                 if extracted:
                     self.memory_manager.add_self_memory(extracted)
             except Exception:
                 pass
+            finally:
+                if is_idle:
+                    set_worker_status({
+                        "running": False,
+                        "target": "user_self",
+                        "completed_at": datetime.utcnow().isoformat(),
+                        "detail": "自身記憶萃取完成"
+                    }, db_path=self.db_path)
 
         threading.Thread(target=_async_extract, daemon=True).start()
 
