@@ -37,8 +37,8 @@ SIMILARITY_THRESHOLD: float = getattr(settings, "EVENT_CLUSTER_SIMILARITY_THRESH
 MAX_HOURS_GAP: float = getattr(settings, "EVENT_CLUSTER_MAX_HOURS_GAP", 24.0)
 MAX_CLUSTER_SIZE: int = getattr(settings, "EVENT_MAX_CLUSTER_SIZE", 4)
 PACING_DELAY: float = getattr(settings, "GEMINI_PACING_DELAY", 4.2)
-EVENT_EXTRACTION_BATCH_SIZE: int = getattr(settings, "EVENT_EXTRACTION_BATCH_SIZE", 400)
-EVENT_EXTRACTION_MAX_SIZE: int = getattr(settings, "EVENT_EXTRACTION_MAX_SIZE", 500)
+EVENT_EXTRACTION_BATCH_SIZE: int = getattr(settings, "EVENT_EXTRACTION_BATCH_SIZE", 800)
+EVENT_EXTRACTION_MAX_SIZE: int = getattr(settings, "EVENT_EXTRACTION_MAX_SIZE", 1000)
 EVENT_EXTRACTION_OVERLAP_SIZE: int = getattr(settings, "EVENT_EXTRACTION_OVERLAP_SIZE", 12)
 EVENT_EXTRACTION_SESSION_GAP_HOURS: float = getattr(settings, "EVENT_EXTRACTION_SESSION_GAP_HOURS", 6.0)
 CLUSTERS_CONSOLIDATION_BATCH_SIZE: int = getattr(settings, "CLUSTERS_CONSOLIDATION_BATCH_SIZE", 20)
@@ -394,25 +394,12 @@ class IngestionPipeline:
         messages = get_messages(contact_id=cid, db_path=db_path)
         total_msgs = len(messages) if messages else 0
 
-        cached_raw = get_contact_events(contact_id=cid, status="raw", db_path=db_path)
-        if cached_raw:
-            logger.info(f"發現 contact_id={cid} 已有 {len(cached_raw)} 條原始事件快取，跳過提煉！")
-            event_chunks = [
-                {
-                    "id": row["event_id"] or f"ev_{row['id']}",
-                    "text": row["content"],
-                    "start_time": row["start_time"],
-                    "end_time": row["end_time"],
-                    "message_count": row["message_count"] or 1,
-                    "type": "event_memory"
-                }
-                for row in cached_raw
-            ]
-        else:
-            if not messages:
-                logger.info(f"聯絡人 {target_username} 無任何訊息。")
-                return {"contact_id": cid, "target_username": target_username, "total_messages": 0, "chunks_rebuilt": 0}
-            event_chunks = self.extract_event_chunks(messages, contact_id=cid, db_path=db_path)
+        if not messages:
+            logger.info(f"聯絡人 {target_username} 無任何訊息。")
+            return {"contact_id": cid, "target_username": target_username, "total_messages": 0, "chunks_rebuilt": 0}
+
+        # 由 extract_event_chunks（EventExtractor）內部依時間區間自動判斷命中與增量補提煉
+        event_chunks = self.extract_event_chunks(messages, contact_id=cid, db_path=db_path)
 
         if not event_chunks:
             msg_dicts = [dict(m) for m in messages]

@@ -100,6 +100,9 @@ class BotPoller:
             item_id = item_id or str(val.get("item_id", ""))
             user_id = user_id or str(val.get("user_id", ""))
 
+        if not text or not str(user_id).strip():
+            return
+
         self._process_message(thread_id, user_id, item_id, text)
 
     # ==================== 背景任務隊列 Worker ====================
@@ -312,19 +315,50 @@ class BotPoller:
             target = result.split(":", 1)[1]
             self.bot_ig.send_message(
                 thread_id,
-                f"分析 {target} 全量歷史對話中..."
+                f"已在背景啟動 {target} 全景深度復盤分析。\n"
+                f"正在統整全量歷史對話並生成 7 大維度長文，完成時會發送通知。"
             )
-            try:
-                info = self.ingestion.build_full_history_summary(target)
-                reply_text = (
-                    f"【{target} 全景關係復盤完成】（共 {info['total_messages']} 則對話）\n\n"
-                    f"💡 7 大章節長文已保存，日常對話卡片已同步更新！\n"
-                    f"可輸入「card full」查看完整長篇復盤內容。"
-                )
-            except Exception as ex:
-                logger.error(f"全景歷史摘要失敗: {ex}")
-                reply_text = f"全景歷史摘要失敗: {ex}"
-            self.bot_ig.send_message(thread_id, reply_text)
+
+            def _async_full_summary():
+                start_ts = time.time()
+                set_worker_status({
+                    "running": True,
+                    "target": target,
+                    "mode": "全景復盤分析",
+                    "start_time": start_ts,
+                    "detail": "正統整全量歷史對話並提煉深度長文中...",
+                    "last_update": datetime.utcnow().isoformat()
+                })
+                try:
+                    info = self.ingestion.build_full_history_summary(target)
+                    elapsed_min = int((time.time() - start_ts) // 60)
+                    set_worker_status({
+                        "running": False,
+                        "target": target,
+                        "completed_at": datetime.utcnow().isoformat()
+                    })
+                    reply_text = (
+                        f"【{target} 全景關係復盤完成】（共 {info['total_messages']} 則對話，耗時約 {elapsed_min} 分鐘）\n\n"
+                        f"💡 7 大章節長文已保存，日常對話卡片已同步更新！\n"
+                        f"可輸入「card full」查看完整長篇復盤內容。"
+                    )
+                except Exception as ex:
+                    logger.error(f"全景歷史摘要失敗: {ex}")
+                    set_worker_status({
+                        "running": False,
+                        "target": target,
+                        "error": str(ex),
+                        "failed_at": datetime.utcnow().isoformat()
+                    })
+                    reply_text = f"全景歷史摘要失敗: {ex}"
+
+                if self.bot_ig and thread_id:
+                    try:
+                        self.bot_ig.send_message(thread_id, reply_text)
+                    except Exception as send_err:
+                        logger.warning(f"發送完成通知失敗: {send_err}")
+
+            threading.Thread(target=_async_full_summary, daemon=True).start()
 
         elif result.startswith("SYNC_REQUEST:"):
             target = result.split(":", 1)[1]
@@ -343,14 +377,53 @@ class BotPoller:
 
         elif result.startswith("REBUILD_VECTORS_REQUEST:"):
             target = result.split(":", 1)[1]
-            self.bot_ig.send_message(thread_id, f"重建 {target} 向量庫中...")
-            try:
-                info = self.ingestion.rebuild_vectors(target)
-                reply_text = f"向量庫重建完成：總量 {info['total_messages']} 則訊息，提煉 {info['chunks_rebuilt']} 條事件記憶。"
-            except Exception as ex:
-                logger.error(f"重建向量庫失敗: {ex}")
-                reply_text = f"重建 {target} 向量庫失敗: {ex}"
-            self.bot_ig.send_message(thread_id, reply_text)
+            self.bot_ig.send_message(
+                thread_id,
+                f"已在背景啟動 {target} 向量庫重建。\n"
+                f"系統將採用批次斷點續傳提煉記憶，完成時會發送通知。\n"
+                f"期間可正常傳送訊息或使用 status 查詢進度。"
+            )
+
+            def _async_rebuild():
+                start_ts = time.time()
+                set_worker_status({
+                    "running": True,
+                    "target": target,
+                    "mode": "重建向量庫",
+                    "start_time": start_ts,
+                    "detail": "進行時間切塊與事件提煉中...",
+                    "last_update": datetime.utcnow().isoformat()
+                })
+                try:
+                    info = self.ingestion.rebuild_vectors(target)
+                    elapsed_min = int((time.time() - start_ts) // 60)
+                    set_worker_status({
+                        "running": False,
+                        "target": target,
+                        "completed_at": datetime.utcnow().isoformat()
+                    })
+                    reply_text = (
+                        f"【{target} 向量庫重建完成】（耗時約 {elapsed_min} 分鐘）\n"
+                        f"總訊息: {info['total_messages']} 則\n"
+                        f"提煉事件記憶: {info['chunks_rebuilt']} 條已寫入向量庫"
+                    )
+                except Exception as ex:
+                    logger.error(f"重建向量庫失敗: {ex}")
+                    set_worker_status({
+                        "running": False,
+                        "target": target,
+                        "error": str(ex),
+                        "failed_at": datetime.utcnow().isoformat()
+                    })
+                    reply_text = f"重建 {target} 向量庫失敗: {ex}"
+
+                if self.bot_ig and thread_id:
+                    try:
+                        self.bot_ig.send_message(thread_id, reply_text)
+                    except Exception as send_err:
+                        logger.warning(f"發送完成通知失敗: {send_err}")
+
+            threading.Thread(target=_async_rebuild, daemon=True).start()
 
         else:
             self.bot_ig.send_message(thread_id, result)
@@ -434,7 +507,8 @@ class BotPoller:
                     thread_id = str(thread.id)
                     msgs = self.bot_ig.get_thread_messages(thread_id=thread_id, amount=10)
                     for m in msgs:
-                        self._process_message(thread_id, str(m.user_id), str(m.id), m.text or "")
+                        if m.text and str(m.user_id).strip():
+                            self._process_message(thread_id, str(m.user_id), str(m.id), m.text)
             except LoginRequired:
                 logger.error("Session 過期失效！")
                 break

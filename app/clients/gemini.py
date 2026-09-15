@@ -16,20 +16,26 @@ from app.core.config import settings
 logger = logging.getLogger("bestieAI.clients.gemini")
 
 
+def _is_rate_limit(err_str: str) -> bool:
+    return "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "quota" in err_str.lower()
+
+
+def _is_invalid_key(err_str: str) -> bool:
+    return "API_KEY_INVALID" in err_str or "API key not valid" in err_str or ("INVALID_ARGUMENT" in err_str and "key" in err_str.lower())
+
+
 class GeminiKeyRing:
     """管理多組 Gemini API Key 的輪換池與冷卻狀態。"""
 
     def __init__(self, keys: Optional[List[str]] = None):
         if keys:
-            self.keys = [k.strip() for k in keys if k.strip()]
+            self.keys = []
+            for k in keys:
+                cleaned = str(k).strip().strip("'\"").strip()
+                if cleaned and cleaned not in self.keys:
+                    self.keys.append(cleaned)
         else:
-            # 從設定讀取 GEMINI_API_KEYS 或 GEMINI_API_KEY
-            raw_keys = getattr(settings, "GEMINI_API_KEYS", None)
-            if raw_keys:
-                self.keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
-            else:
-                single_key = getattr(settings, "GEMINI_API_KEY", "")
-                self.keys = [single_key] if single_key else []
+            self.keys = list(getattr(settings, "api_keys_list", []))
 
         if not self.keys:
             logger.warning("未配置任何 GEMINI_API_KEY！")
@@ -86,7 +92,7 @@ class GeminiClient:
         candidate_models: Optional[List[str]] = None,
         max_retries: int = 3
     ) -> str:
-        """呼叫文字生成 API（遇到 429 自動輪換 Key 與退避重試）。"""
+        """呼叫文字生成 API（遇到 429 或無效 Key 自動輪換下一把 Key 與退避重試）。"""
         models = []
         if preferred_model:
             models.append(preferred_model)
@@ -95,19 +101,47 @@ class GeminiClient:
         seen = set()
         dedup_models = [m for m in models if not (m in seen or seen.add(m))]
 
+        start_t = time.time()
         for model in dedup_models:
             for attempt in range(max_retries):
                 key = self.key_ring.get_available_key()
                 client = self.key_ring.get_client(key)
+                call_start = time.time()
                 try:
                     res = client.models.generate_content(model=model, contents=prompt)
-                    return res.text or ""
+                    out_text = res.text or ""
+                    usage = getattr(res, "usage_metadata", None)
+                    p_tok = getattr(usage, "prompt_token_count", None) if usage else None
+                    c_tok = getattr(usage, "candidates_token_count", None) if usage else None
+                    t_tok = getattr(usage, "total_token_count", None) if usage else None
+                    try:
+                        from app.services.llm_service import log_llm_call
+                        log_llm_call(
+                            model=model,
+                            prompt=prompt,
+                            output=out_text,
+                            duration_sec=time.time() - call_start,
+                            prompt_tokens=p_tok,
+                            candidate_tokens=c_tok,
+                            total_tokens=t_tok,
+                        )
+                    except Exception:
+                        pass
+                    return out_text
                 except Exception as e:
+                    try:
+                        from app.services.llm_service import log_llm_call
+                        log_llm_call(model=model, prompt=prompt, error=e, duration_sec=time.time() - call_start)
+                    except Exception:
+                        pass
                     err_str = str(e)
-                    is_rate_limit = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
-                    if is_rate_limit and key:
-                        self.key_ring.mark_cooldown(key, cooldown_seconds=65.0)
-                        # 還有重試機會，換下一個 Key 繼續試
+                    is_rate_limit = _is_rate_limit(err_str)
+                    is_invalid = _is_invalid_key(err_str)
+                    if (is_rate_limit or is_invalid) and key:
+                        cooldown_sec = 86400.0 if is_invalid else 65.0
+                        self.key_ring.mark_cooldown(key, cooldown_seconds=cooldown_sec)
+                        if is_invalid:
+                            logger.error(f"Gemini API Key (***{key[-4:] if len(key) >= 4 else '***'}) 格式或憑證無效，已排除: {e}")
                         if attempt < max_retries - 1:
                             continue
                     logger.warning(f"模型 {model} 呼叫失敗 (嘗試 {attempt + 1}/{max_retries}): {e}")
@@ -159,9 +193,13 @@ class GeminiClient:
                     break
                 except Exception as e:
                     err_str = str(e)
-                    is_rate_limit = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
-                    if is_rate_limit and key:
-                        self.key_ring.mark_cooldown(key, cooldown_seconds=65.0)
+                    is_rate_limit = _is_rate_limit(err_str)
+                    is_invalid = _is_invalid_key(err_str)
+                    if (is_rate_limit or is_invalid) and key:
+                        cooldown_sec = 86400.0 if is_invalid else 65.0
+                        self.key_ring.mark_cooldown(key, cooldown_seconds=cooldown_sec)
+                        if is_invalid:
+                            logger.error(f"Gemini API Key (***{key[-4:] if len(key) >= 4 else '***'}) 格式或憑證無效，已排除: {e}")
                         if attempt < max_retries - 1:
                             continue
                     logger.warning(f"Embedding 批次 {start_idx // max_batch_size + 1} 失敗 (嘗試 {attempt + 1}/{max_retries}): {e}")

@@ -39,8 +39,8 @@ class EventExtractor:
     def __init__(
         self,
         gemini_client: Optional[GeminiClient] = None,
-        target_batch_size: int = 400,
-        max_batch_size: int = 500,
+        target_batch_size: int = 800,
+        max_batch_size: int = 1000,
         overlap_size: int = 12,
         session_gap_hours: float = 6.0
     ):
@@ -118,11 +118,47 @@ class EventExtractor:
         event_chunks = []
         pacing = getattr(settings, "GEMINI_PACING_DELAY", 4.2)
         total_batches = len(batches)
+        total_messages = len(sorted_msgs)
+        logger.info(
+            f"對話歷史共 {total_messages} 則訊息，切分為 {total_batches} 個時間感知批次"
+            f"（目標 {self.target_batch_size} 則/批，重疊 {self.overlap_size} 則）"
+        )
+
+        # 載入現有 raw 快取，支援斷點續傳
+        existing_raw = []
+        if contact_id:
+            from app.storage.db import get_contact_events
+            existing_raw = get_contact_events(contact_id=contact_id, status="raw", db_path=db_path)
+
+        # 建立已存在的時間區間快取映射: (start_time, end_time) -> [events]
+        cached_batch_map: Dict[tuple, List[Dict[str, Any]]] = {}
+        for r in existing_raw:
+            key = (r["start_time"], r["end_time"])
+            if key not in cached_batch_map:
+                cached_batch_map[key] = []
+            cached_batch_map[key].append({
+                "id": r["event_id"] or f"ev_{r['id']}",
+                "text": r["content"],
+                "start_time": r["start_time"],
+                "end_time": r["end_time"],
+                "message_count": r["message_count"] or 1,
+                "type": "event_memory"
+            })
+
         template = PROMPT_PATH.read_text(encoding="utf-8")
 
-        logger.info(f"對話歷史切分為 {total_batches} 個時間感知批次（目標 {self.target_batch_size} 則，重疊 {self.overlap_size} 則）")
-
         for b_idx, batch in enumerate(batches):
+            b_start = batch[0]["sent_at"]
+            b_end = batch[-1]["sent_at"]
+            cache_key = (b_start, b_end)
+
+            # 斷點續傳命中：跳過已提煉批次
+            if cache_key in cached_batch_map:
+                hits = cached_batch_map[cache_key]
+                event_chunks.extend(hits)
+                logger.info(f"批次 {b_idx + 1}/{total_batches} 已有本機快取 ({len(hits)} 條事件，涵蓋 {len(batch)} 則訊息)，跳過呼叫")
+                continue
+
             formatted_lines = []
             for m in batch:
                 sender_label = "我" if m["sender"] == "me" else "對方"
@@ -147,8 +183,8 @@ class EventExtractor:
                             item = {
                                 "id": f"event_{b_idx}_{e_idx}",
                                 "text": line,
-                                "start_time": batch[0]["sent_at"],
-                                "end_time": batch[-1]["sent_at"],
+                                "start_time": b_start,
+                                "end_time": b_end,
                                 "message_count": len(batch),
                                 "type": "event_memory"
                             }
@@ -162,7 +198,9 @@ class EventExtractor:
             if contact_id and batch_events:
                 try:
                     save_contact_events(contact_id, batch_events, status="raw", db_path=db_path)
-                    logger.info(f"批次 {b_idx + 1}/{total_batches} 提煉完成 ({len(batch_events)} 條)，已即時落盤")
+                    logger.info(
+                        f"批次 {b_idx + 1}/{total_batches} 提煉完成 ({len(batch_events)} 條事件，涵蓋 {len(batch)} 則訊息)，已即時落盤"
+                    )
                 except Exception as e:
                     logger.warning(f"即時落盤失敗 (非致命): {e}")
 

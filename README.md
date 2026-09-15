@@ -2,7 +2,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![uv](<https://img.shields.io/badge/package%20manager-uv-green.svg>)](https://github.com/astral-sh/uv)
-[![Tests Passing](<https://img.shields.io/badge/tests-57%20passed-brightgreen.svg>)]()
+[![Tests Passing](<https://img.shields.io/badge/tests-63%20passed-brightgreen.svg>)](https://github.com/astral-sh/uv)
 
 **bestieAI** 是一個專為個人打造的 Instagram AI 陪聊與回覆策略機器人。
 
@@ -89,6 +89,9 @@
   - **`app/pipelines/`**：業務管線自給自足，組裝專屬 Prompt（事件提煉、時序分群、批次融合、人物摘要）。
   - **`app/storage/`**：純化本地存儲職責（`db.py` SQLite 事實來源、`chroma_store.py` 純本地向量索引）。
 - **宣告式指令註冊（`@command_handler`）**：淘汰龐大的 `if/elif` 判斷，採用 Registry 模式達成高內聚低耦合，並支援簡短別名。
+- **批次級精準斷點續傳**：提煉時依時間區間自動比對本地已快取事件，中斷重跑時精準跳過已完成批次，節省 API 額度並確保資料完整。
+- **非同步執行緒化**：重構向量庫與歷史摘要等耗時任務全數改以背景守護執行緒執行，不阻塞指令接收，隨時可用 `status` 查詢任務模式與進度。
+- **結構化 Token 消耗日誌**：攔截 Gemini API 回傳之 `usage_metadata`，於 `llm.log` 詳細記錄 Prompt、Candidate 與 Total Tokens 消耗。
 - **多模型自動容錯降級陣列**：遇到 API 尖峰、503 過載或限速時，自動依序切換候選模型（`gemini-3.8-flash` → `gemini-3.7-flash` → `gemini-3.6-flash` → `gemini-3.5-flash-lite`）。
 - **外部 Prompt 範本化**：所有 Prompt 全面抽離為 `app/prompts/*.txt` 檔案，無任何寫死字串，支援獨立熱更新與版本控管。
 
@@ -142,7 +145,7 @@
 
 ---
 
-### 步驟 2：複製並設定環境變數（`.env`）
+### 步驟 2：複製並設定環境變數
 
 複製範本檔案建立本機環境設定：
 
@@ -199,12 +202,14 @@ uv run pytest -v tests
 ```
 
 - **`test_architecture_and_rag.py`**：時序向量分群演算法、多 Cluster 批次融合、共享向量檢索、時間感知滑動窗口切塊
+- **`test_breakpoint_resume.py`**：批次級時間區間斷點續傳命中與跳過機制
+- **`test_gemini_keyring.py`**：多組 Gemini API Key 輪換、個別 429 標記冷卻 65 秒與備份金鑰容錯機制
 - **`test_api_contracts.py`**：Instagrapi 與 Gemini SDK 合約模擬測試
 - **`test_db.py`**：資料庫遷移、聯絡人 CRUD、訊息去重與摘要門檻判斷
 - **`test_self_rag.py`**：使用者自身向量庫寫入/檢索、暱稱關聯、跨對話記憶調用與 `me` 指令
-- **`test_poller.py`**：白名單攔截鑑權、背景佇列 Worker 邊界防護與任務交接冷卻
+- **`test_poller.py`**：白名單攔截鑑權、背景非同步執行緒與狀態回報、佇列 Worker 邊界防護與任務交接冷卻
 - **`test_rate_limit.py`**：擬真人隨機延遲標準差檢驗與微停頓觸發率
 - **`test_router.py`**：宣告式指令路由、模糊搜尋候選確認、`card` 查詢與聊天對話歷史傳遞
 - **`test_sessions.py`**：Fernet 金鑰本地持久化與 Session 加解密安全性
-- **`test_llm_log.py`**：`ENABLE_LLM_LOG` 開關與結構化日誌記錄
+- **`test_llm_log.py`**：`ENABLE_LLM_LOG` 開關、結構化 Token 用量（Prompt / Candidate / Total）日誌記錄
 - **`test_ingestion.py`**：歷史訊息清洗、時間分段 Chunking 與全景復盤卡生成

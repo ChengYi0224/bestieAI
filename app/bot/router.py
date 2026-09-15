@@ -194,12 +194,24 @@ class CommandRouter:
         w_status = get_worker_status(db_path=self.db_path)
         worker_section = ""
         if w_status and w_status.get("running"):
+            mode = w_status.get("mode", "背景任務")
+            target = w_status.get("target", "未指定")
+            detail = w_status.get("detail", "")
             elapsed_min = int((time.time() - w_status.get("start_time", time.time())) // 60)
             queue_str = f"\n排隊中: {', '.join(w_status.get('queue', []))}" if w_status.get('queue') else ""
+
+            if w_status.get("pages") is not None:
+                progress_str = f"進度: 第 {w_status.get('pages', 0)} 頁 ({w_status.get('count', 0)} 則)"
+            elif detail:
+                progress_str = f"進度: {detail}"
+            else:
+                progress_str = f"進度: 處理中"
+
+            title = "【背景抓取中】" if (w_status.get("pages") is not None or "抓取" in mode) else f"【{mode}執行中】"
             worker_section = (
-                f"【背景抓取中】\n"
-                f"對象: {w_status.get('target')}\n"
-                f"進度: 第 {w_status.get('pages', 0)} 頁 ({w_status.get('count', 0)} 則)\n"
+                f"{title}\n"
+                f"對象: {target}\n"
+                f"{progress_str}\n"
                 f"耗時: 約 {elapsed_min} 分鐘"
                 f"{queue_str}\n\n"
             )

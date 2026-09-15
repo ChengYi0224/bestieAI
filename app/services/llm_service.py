@@ -71,7 +71,10 @@ def log_llm_call(
     output: Optional[str] = None,
     error: Optional[Exception] = None,
     duration_sec: float = 0.0,
-    log_path: Optional[Path] = None
+    log_path: Optional[Path] = None,
+    prompt_tokens: Optional[int] = None,
+    candidate_tokens: Optional[int] = None,
+    total_tokens: Optional[int] = None,
 ) -> None:
     """將每次 LLM 的 input 與 output / error 結構化記錄到 llm.log（受 settings.ENABLE_LLM_LOG 控制）"""
     if not settings.ENABLE_LLM_LOG:
@@ -81,9 +84,13 @@ def log_llm_call(
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         status = "SUCCESS" if error is None else "FAILED"
 
+        token_str = ""
+        if total_tokens is not None:
+            token_str = f" | Tokens: {total_tokens} (prompt: {prompt_tokens or 0}, candidate: {candidate_tokens or 0})"
+
         lines = [
             "=" * 80,
-            f"[{now_str}] [MODEL: {model}] [STATUS: {status}] (耗時: {duration_sec:.2f}s)",
+            f"[{now_str}] [MODEL: {model}] [STATUS: {status}] (耗時: {duration_sec:.2f}s{token_str})",
             "-" * 34 + " [INPUT] " + "-" * 37,
             prompt.strip(),
         ]
@@ -126,7 +133,12 @@ class LLMClient:
         candidate_models: Optional[List[str]] = None,
         log_path: Optional[Path] = None
     ):
-        self.api_key = api_key or settings.GEMINI_API_KEY
+        if api_key:
+            self.api_key = api_key.strip().strip("'\"").strip()
+        elif settings.api_keys_list:
+            self.api_key = settings.api_keys_list[0]
+        else:
+            self.api_key = (settings.GEMINI_API_KEY or "").strip().strip("'\"").strip()
         self.candidate_models = candidate_models or settings.candidate_models_list
         self.log_path = log_path or settings.LLM_LOG_PATH
         self._client = None
@@ -140,13 +152,35 @@ class LLMClient:
         return self._client
 
     @gemini_retry(max_short_retries=2, base_delay=1.5)
-    @log_llm_execution
     def _call_model(self, model: str, prompt: str) -> str:
-        response = self.client.models.generate_content(
-            model=model,
-            contents=prompt
-        )
-        return response.text
+        start_t = time.time()
+        try:
+            response = self.client.models.generate_content(
+                model=model,
+                contents=prompt
+            )
+            out_text = response.text or ""
+            usage = getattr(response, "usage_metadata", None)
+            log_llm_call(
+                model=model,
+                prompt=prompt,
+                output=out_text,
+                duration_sec=time.time() - start_t,
+                log_path=self.log_path,
+                prompt_tokens=getattr(usage, "prompt_token_count", None) if usage else None,
+                candidate_tokens=getattr(usage, "candidates_token_count", None) if usage else None,
+                total_tokens=getattr(usage, "total_token_count", None) if usage else None,
+            )
+            return out_text
+        except Exception as e:
+            log_llm_call(
+                model=model,
+                prompt=prompt,
+                error=e,
+                duration_sec=time.time() - start_t,
+                log_path=self.log_path
+            )
+            raise
 
     def _generate_with_fallback(
         self,

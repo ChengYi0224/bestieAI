@@ -1,6 +1,6 @@
 # 04 - Chroma 向量儲存架構與集合設計
 
-## 1. 雙軌集合設計（Dual Collections）
+## 1. 雙軌集合設計
 
 bestieAI 在 ChromaDB 中維護兩個職責嚴格隔離的集合：
 

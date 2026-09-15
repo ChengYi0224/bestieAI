@@ -112,7 +112,7 @@ def test_status_and_query_worker_progress(tmp_path):
     # 模擬背景爬蟲正在執行
     set_worker_status({
         "running": True,
-        "target": "syun_test",
+        "target": "test_target",
         "mode": "安全慢速全量抓取",
         "pages": 12,
         "count": 240,
@@ -121,14 +121,14 @@ def test_status_and_query_worker_progress(tmp_path):
 
     res = router.handle_message("query")
     assert "背景抓取中" in res
-    assert "syun_test" in res
+    assert "test_target" in res
     assert "第 12 頁" in res
     assert "240 則" in res
 
     # 模擬背景爬蟲已結束
     set_worker_status({
         "running": False,
-        "target": "syun_test"
+        "target": "test_target"
     }, db_path=db_file)
 
     res_done = router.handle_message("status")

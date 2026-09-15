@@ -28,12 +28,18 @@ class Settings(BaseSettings):
 
     @property
     def api_keys_list(self) -> list[str]:
-        """優先解析 GEMINI_API_KEYS（逗號分隔），若未提供則退回 GEMINI_API_KEY。"""
-        if self.GEMINI_API_KEYS:
-            return [k.strip() for k in self.GEMINI_API_KEYS.split(",") if k.strip()]
-        if self.GEMINI_API_KEY:
-            return [self.GEMINI_API_KEY.strip()]
-        return []
+        """健全解析 GEMINI_API_KEYS 或 GEMINI_API_KEY（支援單一、多組逗號分隔、去除引號與空白）。"""
+        keys: list[str] = []
+        raw_sources = [self.GEMINI_API_KEYS, self.GEMINI_API_KEY]
+        for src in raw_sources:
+            if not src:
+                continue
+            clean_src = str(src).strip().strip("'\"")
+            for item in clean_src.split(","):
+                cleaned = item.strip().strip("'\"").strip()
+                if cleaned and cleaned not in keys:
+                    keys.append(cleaned)
+        return keys
 
     # ==================== 檔案與目錄路徑 ====================
     # SQLite 資料庫檔案路徑
@@ -98,7 +104,8 @@ class Settings(BaseSettings):
     TRACK_FULL_DEFAULT_LIMIT: int = Field(default=5000)
 
     # 事件萃取時，單一批次提煉的訊息筆數（每批提煉為 2~4 條關鍵事件摘要）
-    EVENT_EXTRACTION_BATCH_SIZE: int = Field(default=40)
+    EVENT_EXTRACTION_BATCH_SIZE: int = Field(default=800)
+    EVENT_EXTRACTION_MAX_SIZE: int = Field(default=1000)
 
     # 歷史對話切塊（Chunking）時，單一 Chunk 容納的最多訊息筆數（保留向後相容）
     CHUNK_MAX_SIZE: int = Field(default=20)

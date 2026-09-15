@@ -39,7 +39,7 @@
 
 ---
 
-## 3. 使用情境（User Flow）
+## 3. 使用情境
 
 ### 3.1 指令情境
 
@@ -139,7 +139,7 @@ Bot 回覆：先接住情緒／分析語氣／給 2-3 種回覆版本
 
 ## 5. 帳號登入與 Session 持久化
 
-### 5.1 登入流程（含 2FA / 驗證碼）
+### 5.1 登入流程
 
 ```
 啟動 session_manager.login(account_type)
@@ -286,7 +286,7 @@ track [IG ID]
 
 ---
 
-## 8. 分層記憶架構與事件 RAG（v0.3 革命）
+## 8. 分層記憶架構與事件 RAG
 
 採用「近期原始層 → 事件條目 RAG 層 → 雙軌摘要層」三層記憶，徹底解決破碎字句雜訊與 Token 暴增問題：
 
@@ -297,10 +297,13 @@ track [IG ID]
 | **日常輕量卡**            | **[v0.3]** 限制 300–500 字之核心人物與相處狀態（注入日常聊天 Prompt） | SQLite `contacts.summary_card`                                    |
 | **全景深度長文**          | **[v0.3]** 7 大章節、數千字全景關係復盤長文（`card full` 查看，不注入聊天） | SQLite `contacts.full_history_summary`                            |
 
-### 8.1 事件記憶 RAG（Event-based Memory RAG）
+### 8.1 事件記憶 RAG
 - **揚棄原始碎句**：傳統 RAG 將破碎口語（如「？？？」、「哈哈哈哈」）直接切塊 Embedding，資訊密度極低且檢索充滿雜訊。
-- **批次事件萃取**：每 30~50 則對話由 LLM（優先調用 Lite 模型池）透過 `extract_events.txt` 提煉為 2~4 則高密度時間事實（例如：`[2026-08-18] 兩人相約夜市吃德克士，分享音樂與室友生活`）。
-- **共享單次 Query Embedding**：在 `MemoryService` 檢索時，單次對話僅發送 1 次 Embedding API 請求，計算出 768 維向量後同時並行檢索 Contact Event、Self、以及暱稱跨對象庫，徹底消除重複延遲。
+- **800 則時間感知滑動窗口**：單批目標容量提升至 800 則（硬上限 1000 則），相鄰批次保留 12 則重疊，對話靜默 6 小時自然切分。移除條數限制，依客觀事實密度提煉精華。
+- **批次級精準斷點續傳**：提煉時依各批時間區間比對本地已存快取（`status='raw'`），重跑時精準跳過已提煉批次，補齊尚未處理批次。
+- **長任務非同步背景執行**：`rebuild_vectors` 與 `summarize_history` 改為背景守護執行緒執行，不阻塞訊息接收，`status` / `query` 指令可隨時即時回報當前模式與耗時進度。
+- **結構化 Token 消耗追蹤**：攔截 Gemini API 回傳之 `usage_metadata`，於 `llm.log` 詳細記錄 Prompt、Candidate 與 Total Tokens。
+- **共享單次 Query Embedding**：在檢索時，單次對話僅發送 1 次 Embedding API 請求，計算出 768 維向量後同時並行檢索 Contact Event、Self、以及暱稱跨對象庫，徹底消除重複延遲。
 
 ### 8.2 雙軌摘要架構與更新機制
 1. **日常輕量卡（`summary_card`）**：嚴格壓制在 300~500 字，專供即時聊天的 System Prompt，確保回覆速度在 2~3 秒內。
@@ -312,7 +315,7 @@ track [IG ID]
 
 ---
 
-## 9. 資料庫設計（SQLite）
+## 9. 資料庫設計
 
 ### 9.1 `contacts`
 
@@ -389,7 +392,7 @@ track [IG ID]
 
 ---
 
-## 11. 專案資料夾結構（v0.3 分層模組化架構）
+## 11. 專案資料夾結構
 
 ```
 bestieAI/
@@ -466,7 +469,7 @@ __pycache__/
 
 ---
 
-## 13. 部署與維運（不使用 Docker）
+## 13. 部署與維運
 
 單一 Python 程式 + SQLite + Chroma（本地檔案模式）+ 呼叫 Claude API，用 `venv` 管理套件即可達到「好維護」的目的。
 
@@ -512,7 +515,7 @@ __pycache__/
 
 ---
 
-## 16. 待確認事項（Open Questions）
+## 16. 待確認事項
 
 - [ ] `poller` 的輪詢頻率設多少合適？（頻率越低越安全，但回覆延遲越高，需要抓一個平衡點）
 - [X] embedding model 要用哪一個？（已確認使用 Google Gemini `gemini-embedding-2` 模型，固定 768 維度）
@@ -521,7 +524,7 @@ __pycache__/
 
 ---
 
-## 17. 核心技術抉擇與取捨（ADR）
+## 17. 核心技術抉擇與取捨
 
 僅記錄「具替代方案、沒有絕對對錯，但為滿足特定目標所做的工程取捨」：
 

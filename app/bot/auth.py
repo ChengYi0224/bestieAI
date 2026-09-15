@@ -19,8 +19,12 @@ def require_whitelist(func: Callable) -> Callable:
     """
     @functools.wraps(func)
     def wrapper(self, thread_id: str, user_id: str, item_id: str, text: str, *args, **kwargs) -> Any:
+        # 略過非文字或系統事件（如 MQTT 打字中、已讀回條、心跳等無內容封包）
+        if not text or not str(user_id).strip():
+            return
+
         bot_pk = str(getattr(self.bot_client, "user_id", ""))
-        if user_id and user_id == bot_pk:
+        if user_id and str(user_id) == bot_pk:
             return
 
         if not getattr(self, "allowed_main_pk", None):
@@ -29,7 +33,8 @@ def require_whitelist(func: Callable) -> Callable:
 
         allowed_pk = getattr(self, "allowed_main_pk", None)
         if allowed_pk and str(user_id) != str(allowed_pk):
-            logger.warning(f"[Auth] 攔截到非主帳號 ({user_id}) 之私訊，已靜默忽略。")
+            preview = (text[:60] + "...") if len(text) > 60 else text
+            logger.warning(f"[Auth] 攔截到非主帳號 (user_id={user_id}, thread_id={thread_id}) 之私訊內容: {preview!r}，已靜默忽略。")
             return
 
         return func(self, thread_id, user_id, item_id, text, *args, **kwargs)

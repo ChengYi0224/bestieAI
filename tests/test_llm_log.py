@@ -5,19 +5,23 @@ from app.services.llm_service import LLMClient, log_llm_call
 def test_log_llm_call_writes_structured_log(tmp_path):
     log_file = tmp_path / "test_llm.log"
 
-    # 1. 成功紀錄
+    # 1. 成功紀錄（含 token）
     log_llm_call(
         model="gemini-3.8-flash",
         prompt="你好，請給出回覆建議",
         output="哈囉！以下是回覆建議：1. 好的 2. 沒問題",
         duration_sec=1.25,
-        log_path=log_file
+        log_path=log_file,
+        prompt_tokens=15,
+        candidate_tokens=25,
+        total_tokens=40
     )
 
     content = log_file.read_text(encoding="utf-8")
     assert "[MODEL: gemini-3.8-flash]" in content
     assert "[STATUS: SUCCESS]" in content
     assert "耗時: 1.25s" in content
+    assert "Tokens: 40 (prompt: 15, candidate: 25)" in content
     assert "[INPUT]" in content
     assert "你好，請給出回覆建議" in content
     assert "[OUTPUT]" in content
