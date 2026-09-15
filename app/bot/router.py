@@ -10,7 +10,7 @@ router.py — 宣告式指令路由與訊息調度中心。
 import re
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Tuple, Any, Callable, Dict, List
 
 from app.core.config import settings
@@ -446,7 +446,7 @@ class CommandRouter:
                     "mode": "自身偏好記憶萃取",
                     "detail": "正在非同步分析並萃取對話中的個人偏好事實...",
                     "start_time": time.time(),
-                    "last_update": datetime.utcnow().isoformat()
+                    "last_update": datetime.now(timezone.utc).isoformat()
                 }, db_path=self.db_path)
 
             try:
@@ -460,7 +460,7 @@ class CommandRouter:
                     set_worker_status({
                         "running": False,
                         "target": "user_self",
-                        "completed_at": datetime.utcnow().isoformat(),
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
                         "detail": "自身記憶萃取完成"
                     }, db_path=self.db_path)
 

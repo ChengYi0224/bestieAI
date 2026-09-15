@@ -54,17 +54,21 @@ def test_save_and_get_messages(temp_db):
 
 def test_should_update_summary():
     from app.storage.db import should_update_summary
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
     # 1. 達 50 則門檻
     assert should_update_summary({"new_messages_since_summary": 50}) is True
-    assert should_update_summary({"new_messages_since_summary": 49, "summary_updated_at": datetime.utcnow().isoformat()}) is False
+    assert should_update_summary({"new_messages_since_summary": 49, "summary_updated_at": datetime.now(timezone.utc).isoformat()}) is False
 
-    # 2. 超過 14 天保底門檻
-    old_time = (datetime.utcnow() - timedelta(days=15)).isoformat()
-    assert should_update_summary({"new_messages_since_summary": 5, "summary_updated_at": old_time}) is True
+    # 2. 超過 14 天保底門檻 (UTC aware)
+    old_time_aware = (datetime.now(timezone.utc) - timedelta(days=15)).isoformat()
+    assert should_update_summary({"new_messages_since_summary": 5, "summary_updated_at": old_time_aware}) is True
     # 超過 14 天但無新訊息
-    assert should_update_summary({"new_messages_since_summary": 0, "summary_updated_at": old_time}) is False
+    assert should_update_summary({"new_messages_since_summary": 0, "summary_updated_at": old_time_aware}) is False
+
+    # 3. 超過 14 天保底門檻 (Naive string 相容)
+    old_time_naive = (datetime.now() - timedelta(days=15)).strftime("%Y-%m-%dT%H:%M:%S")
+    assert should_update_summary({"new_messages_since_summary": 3, "summary_updated_at": old_time_naive}) is True
 
 def test_update_contact_summary(temp_db):
     from app.storage.db import update_contact_summary, get_contact_by_id

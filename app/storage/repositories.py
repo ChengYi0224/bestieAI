@@ -6,7 +6,7 @@ repositories.py — 資料存取庫模式 (Repository Pattern) 封裝。
 import json
 import sqlite3
 import functools
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 
@@ -76,7 +76,7 @@ class ContactRepository(BaseRepository):
                 UPDATE bot_state
                 SET active_contact_id = ?, pending_selection = NULL, updated_at = ?
                 WHERE id = 1
-            """, (contact["id"], datetime.utcnow().isoformat()))
+            """, (contact["id"], datetime.now(timezone.utc).isoformat()))
             return True
         return False
 
@@ -90,7 +90,7 @@ class ContactRepository(BaseRepository):
                 UPDATE bot_state
                 SET active_contact_id = ?, pending_selection = NULL, updated_at = ?
                 WHERE id = 1
-            """, (contact["id"], datetime.utcnow().isoformat()))
+            """, (contact["id"], datetime.now(timezone.utc).isoformat()))
             return True
         return False
 
@@ -132,7 +132,7 @@ class ContactRepository(BaseRepository):
                 summary_updated_at = ?,
                 new_messages_since_summary = 0
             WHERE id = ?
-        """, (summary_str, datetime.utcnow().isoformat(), contact_id))
+        """, (summary_str, datetime.now(timezone.utc).isoformat(), contact_id))
 
     @with_connection(readonly=False)
     def update_full_history(self, conn: sqlite3.Connection, contact_id: int, full_summary: Any) -> None:
@@ -142,7 +142,7 @@ class ContactRepository(BaseRepository):
             SET full_history_summary = ?,
                 full_history_updated_at = ?
             WHERE id = ?
-        """, (full_str, datetime.utcnow().isoformat(), contact_id))
+        """, (full_str, datetime.now(timezone.utc).isoformat(), contact_id))
 
     @with_connection(readonly=False)
     def set_nickname(self, conn: sqlite3.Connection, contact_id: int, nickname: Optional[str]) -> bool:
@@ -202,7 +202,7 @@ class MessageRepository(BaseRepository):
             SET new_messages_since_summary = new_messages_since_summary + ?,
                 last_synced_at = ?
             WHERE id = ?
-        """, (inserted, datetime.utcnow().isoformat(), contact_id))
+        """, (inserted, datetime.now(timezone.utc).isoformat(), contact_id))
         return inserted
 
     @with_connection(readonly=True)
@@ -258,7 +258,7 @@ class BotStateRepository(BaseRepository):
     @with_connection(readonly=False)
     def set_worker_status(self, conn: sqlite3.Connection, status_info: Optional[Dict[str, Any]]) -> None:
         val = json.dumps(status_info, ensure_ascii=False) if status_info else None
-        conn.execute("UPDATE bot_state SET worker_status = ?, updated_at = ? WHERE id = 1", (val, datetime.utcnow().isoformat()))
+        conn.execute("UPDATE bot_state SET worker_status = ?, updated_at = ? WHERE id = 1", (val, datetime.now(timezone.utc).isoformat()))
 
     @with_connection(readonly=True)
     def get_worker_status(self, conn: sqlite3.Connection) -> Optional[Dict[str, Any]]:

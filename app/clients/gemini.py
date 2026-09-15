@@ -7,6 +7,7 @@ gemini.py — Google Gemini 外部客戶端封裝。
 """
 import time
 import logging
+import threading
 from typing import List, Optional, Dict, Any
 from google import genai
 from google.genai.errors import APIError
@@ -25,9 +26,10 @@ def _is_invalid_key(err_str: str) -> bool:
 
 
 class GeminiKeyRing:
-    """管理多組 Gemini API Key 的輪換池與冷卻狀態。"""
+    """管理多組 Gemini API Key 的輪換池與冷卻狀態（執行緒安全）。"""
 
     def __init__(self, keys: Optional[List[str]] = None):
+        self._lock = threading.Lock()
         if keys:
             self.keys = []
             for k in keys:
@@ -45,38 +47,41 @@ class GeminiKeyRing:
         self.client_cache: Dict[str, genai.Client] = {}
 
     def mark_cooldown(self, key: str, cooldown_seconds: float = 60.0):
-        """將特定 Key 標記為冷卻狀態。"""
-        self.cooldowns[key] = time.time() + cooldown_seconds
+        """將特定 Key 標記為冷卻狀態（執行緒安全）。"""
+        with self._lock:
+            self.cooldowns[key] = time.time() + cooldown_seconds
         logger.warning(f"Gemini API Key (***{key[-4:] if len(key) >= 4 else '***'}) 進入冷卻 {cooldown_seconds} 秒")
 
     def get_available_key(self) -> Optional[str]:
-        """以 Round-Robin 尋找未在冷卻中的有效 API Key。"""
-        if not self.keys:
-            return None
+        """以 Round-Robin 尋找未在冷卻中的有效 API Key（執行緒安全）。"""
+        with self._lock:
+            if not self.keys:
+                return None
 
-        now = time.time()
-        n = len(self.keys)
-        for i in range(n):
-            idx = (self.current_idx + i) % n
-            key = self.keys[idx]
-            if now >= self.cooldowns.get(key, 0.0):
-                self.current_idx = (idx + 1) % n
-                return key
+            now = time.time()
+            n = len(self.keys)
+            for i in range(n):
+                idx = (self.current_idx + i) % n
+                key = self.keys[idx]
+                if now >= self.cooldowns.get(key, 0.0):
+                    self.current_idx = (idx + 1) % n
+                    return key
 
-        # 若全部都在冷卻中，取冷卻時間最短的
-        earliest_key = min(self.keys, key=lambda k: self.cooldowns.get(k, 0.0))
-        wait_seconds = max(0.0, self.cooldowns[earliest_key] - now)
-        logger.warning(f"所有 API Key 均在冷卻中，最快解鎖需等待 {wait_seconds:.1f} 秒")
-        return earliest_key
+            # 若全部都在冷卻中，取冷卻時間最短的
+            earliest_key = min(self.keys, key=lambda k: self.cooldowns.get(k, 0.0))
+            wait_seconds = max(0.0, self.cooldowns[earliest_key] - now)
+            logger.warning(f"所有 API Key 均在冷卻中，最快解鎖需等待 {wait_seconds:.1f} 秒")
+            return earliest_key
 
     def get_client(self, key: Optional[str] = None) -> genai.Client:
-        """取得對應 Key 的 Client 實例（快取複用）。"""
+        """取得對應 Key 的 Client 實例（快取複用，執行緒安全）。"""
         k = key or self.get_available_key()
         if not k:
             return genai.Client()
-        if k not in self.client_cache:
-            self.client_cache[k] = genai.Client(api_key=k)
-        return self.client_cache[k]
+        with self._lock:
+            if k not in self.client_cache:
+                self.client_cache[k] = genai.Client(api_key=k)
+            return self.client_cache[k]
 
 
 class GeminiClient:

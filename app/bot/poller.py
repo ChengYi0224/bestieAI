@@ -11,7 +11,7 @@ import socket
 import logging
 import queue
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Set, Optional, Dict, Any, List
 from instagrapi import Client
 from instagrapi.exceptions import LoginRequired
@@ -137,7 +137,7 @@ class BotPoller:
                 "pages": 0,
                 "count": 0,
                 "queue": self._get_queued_targets(),
-                "last_update": datetime.utcnow().isoformat()
+                "last_update": datetime.now(timezone.utc).isoformat()
             })
 
             def on_full_progress(*args, **kwargs):
@@ -153,7 +153,7 @@ class BotPoller:
                         "count": count,
                         "detail": f"爬取歷史私訊中: 第 {pages} 頁 (累計 {count} 則)",
                         "queue": self._get_queued_targets(),
-                        "last_update": datetime.utcnow().isoformat()
+                        "last_update": datetime.now(timezone.utc).isoformat()
                     })
                     logger.info(f"[Worker] {target} 慢速爬取進度：第 {pages} 頁，累計 {count} 則")
                 elif len(args) >= 1 and isinstance(args[0], str):
@@ -166,7 +166,7 @@ class BotPoller:
                         "start_time": start_ts,
                         "detail": detail_msg,
                         "queue": self._get_queued_targets(),
-                        "last_update": datetime.utcnow().isoformat()
+                        "last_update": datetime.now(timezone.utc).isoformat()
                     })
                     logger.info(f"[Worker] {target} 全量抓取進度：{detail_msg}")
 
@@ -185,7 +185,7 @@ class BotPoller:
                 set_worker_status({
                     "running": False,
                     "target": target,
-                    "completed_at": datetime.utcnow().isoformat(),
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
                     "total_downloaded": info['downloaded_messages'],
                     "elapsed_min": elapsed_min,
                     "queue": self._get_queued_targets()
@@ -201,7 +201,7 @@ class BotPoller:
                     "running": False,
                     "target": target,
                     "error": str(ex),
-                    "failed_at": datetime.utcnow().isoformat(),
+                    "failed_at": datetime.now(timezone.utc).isoformat(),
                     "queue": self._get_queued_targets()
                 })
                 reply_text = f"全量抓取 {target} 失敗: {ex}"
@@ -343,7 +343,7 @@ class BotPoller:
                     "mode": "全景復盤分析",
                     "start_time": start_ts,
                     "detail": "正統整全量歷史對話並提煉深度長文中...",
-                    "last_update": datetime.utcnow().isoformat()
+                    "last_update": datetime.now(timezone.utc).isoformat()
                 })
 
                 def on_summary_progress(detail_msg: str):
@@ -353,7 +353,7 @@ class BotPoller:
                         "mode": "全景復盤分析",
                         "start_time": start_ts,
                         "detail": detail_msg,
-                        "last_update": datetime.utcnow().isoformat()
+                        "last_update": datetime.now(timezone.utc).isoformat()
                     })
                     logger.info(f"[Summary Progress] {target}: {detail_msg}")
 
@@ -363,7 +363,7 @@ class BotPoller:
                     set_worker_status({
                         "running": False,
                         "target": target,
-                        "completed_at": datetime.utcnow().isoformat(),
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
                         "detail": f"全景復盤完成 (共 {info['total_messages']} 則對話)"
                     })
                     reply_text = (
@@ -377,7 +377,7 @@ class BotPoller:
                         "running": False,
                         "target": target,
                         "error": str(ex),
-                        "failed_at": datetime.utcnow().isoformat()
+                        "failed_at": datetime.now(timezone.utc).isoformat()
                     })
                     reply_text = f"全景歷史摘要失敗: {ex}"
 
@@ -398,7 +398,7 @@ class BotPoller:
                 "mode": "增量同步",
                 "start_time": time.time(),
                 "detail": f"正在同步 {target} 最新私訊...",
-                "last_update": datetime.utcnow().isoformat()
+                "last_update": datetime.now(timezone.utc).isoformat()
             })
             try:
                 if self.main_ig is None:
@@ -410,7 +410,7 @@ class BotPoller:
                 set_worker_status({
                     "running": False,
                     "target": target,
-                    "completed_at": datetime.utcnow().isoformat(),
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
                     "detail": f"同步完成: 新增 {sync_info['new_messages_count']} 則訊息"
                 })
             except Exception as ex:
@@ -420,7 +420,7 @@ class BotPoller:
                     "running": False,
                     "target": target,
                     "error": str(ex),
-                    "failed_at": datetime.utcnow().isoformat()
+                    "failed_at": datetime.now(timezone.utc).isoformat()
                 })
             self.bot_ig.send_message(thread_id, reply_text)
 
@@ -441,7 +441,7 @@ class BotPoller:
                     "mode": "重建向量庫",
                     "start_time": start_ts,
                     "detail": "準備讀取本地歷史對話紀錄...",
-                    "last_update": datetime.utcnow().isoformat()
+                    "last_update": datetime.now(timezone.utc).isoformat()
                 })
 
                 def on_rebuild_progress(detail_msg: str):
@@ -451,7 +451,7 @@ class BotPoller:
                         "mode": "重建向量庫",
                         "start_time": start_ts,
                         "detail": detail_msg,
-                        "last_update": datetime.utcnow().isoformat()
+                        "last_update": datetime.now(timezone.utc).isoformat()
                     })
                     logger.info(f"[Rebuild Progress] {target}: {detail_msg}")
 
@@ -461,7 +461,7 @@ class BotPoller:
                     set_worker_status({
                         "running": False,
                         "target": target,
-                        "completed_at": datetime.utcnow().isoformat(),
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
                         "detail": f"重建完成 (共 {info['chunks_rebuilt']} 條記憶)"
                     })
                     reply_text = (
@@ -475,7 +475,7 @@ class BotPoller:
                         "running": False,
                         "target": target,
                         "error": str(ex),
-                        "failed_at": datetime.utcnow().isoformat()
+                        "failed_at": datetime.now(timezone.utc).isoformat()
                     })
                     reply_text = f"重建 {target} 向量庫失敗: {ex}"
 

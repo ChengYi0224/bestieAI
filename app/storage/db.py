@@ -2,7 +2,7 @@
 db.py — 資料庫連線、Schema 定義、自動遷移與平滑相容接口。
 """
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from app.core.config import settings
@@ -11,9 +11,11 @@ from app.core.config import settings
 def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
     path = db_path or settings.DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA busy_timeout = 30000;")
     return conn
 
 
@@ -215,7 +217,10 @@ def should_update_summary(
 
     try:
         updated_at = datetime.fromisoformat(updated_at_str)
-        if (datetime.utcnow() - updated_at).days >= days_lim and new_msgs > 0:
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+        now_utc = datetime.now(timezone.utc)
+        if (now_utc - updated_at).days >= days_lim and new_msgs > 0:
             return True
     except Exception:
         pass
