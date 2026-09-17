@@ -40,6 +40,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from app.core.config import settings
+from app.core.error_logger import log_error
 from app.clients.gemini import GeminiClient
 from app.storage.chroma_store import ChromaStore, VectorStore
 from app.storage.db import (
@@ -283,6 +284,7 @@ class IngestionPipeline:
             embeddings = self.vector_store.get_embeddings_batch(texts)
         except Exception as e:
             logger.warning(f"取得分群向量失敗，跳過分群: {e}")
+            log_error(e, context="IngestionPipeline.rebuild_vectors — get_embeddings_batch", logger_name="bestieAI.ingestion_service")
             return [[c] for c in chunks]
 
         if progress_callback:
@@ -493,6 +495,7 @@ class IngestionPipeline:
             save_contact_events(cid, final_chunks, status="consolidated", db_path=db_path)
         except Exception as e:
             logger.warning(f"持久化 consolidated 事件失敗: {e}")
+            log_error(e, context="IngestionPipeline.rebuild_vectors — save_contact_events", logger_name="bestieAI.ingestion_service")
 
         logger.info(f"成功為 contact_id={cid} 重建 {len(final_chunks)} 條向量記憶。")
         if progress_callback:

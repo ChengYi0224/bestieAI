@@ -101,7 +101,7 @@ class GeminiClient:
         models = []
         if preferred_model:
             models.append(preferred_model)
-        models.extend(candidate_models or getattr(settings, "candidate_models_list", ["gemini-3.8-flash", "gemini-3.5-flash-lite"]))
+        models.extend(candidate_models or getattr(settings, "candidate_models_list", ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"]))
         # 去重維持順序
         seen = set()
         dedup_models = [m for m in models if not (m in seen or seen.add(m))]

@@ -25,7 +25,7 @@ from app.core.rate_limit import gemini_retry, _is_gemini_retryable_error
 logger = logging.getLogger("bestieAI.llm_service")
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
-COMPANION_PROMPT_PATH = PROMPTS_DIR / "chat" / "companion.txt"
+COMPANION_PROMPT_PATH = PROMPTS_DIR / "chat" / "companion_v3.txt"
 SYSTEM_PROMPT_PATH = COMPANION_PROMPT_PATH
 SUMMARY_PROMPT_PATH = PROMPTS_DIR / "summary" / "summary.txt"
 FULL_SUMMARY_PROMPT_PATH = PROMPTS_DIR / "summary" / "full.txt"
@@ -40,7 +40,6 @@ CANDIDATE_MODELS: List[str] = [
     "gemini-3.8-flash",
     "gemini-3.7-flash",
     "gemini-3.6-flash",
-    "gemini-3.5-flash-lite",
 ]
 
 # 自身記憶萃取 (extract_self_info) 預設專用模型（優先使用 500 RPD 輕量穩定模型）

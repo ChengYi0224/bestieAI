@@ -3,11 +3,14 @@ import signal
 import logging
 from app.storage.db import init_db
 from app.bot.poller import BotPoller
+from app.core.error_logger import get_error_logger
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
+get_error_logger()  # 初始化 error.log handler
+
 
 def main():
     print("=== IG AI 陪聊機器人 (bestieAI) 啟動中 ===")

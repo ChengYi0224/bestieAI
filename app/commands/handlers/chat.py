@@ -29,6 +29,7 @@ from typing import Any, Optional
 from app.commands.base import CommandResult
 from app.commands.commands import ChatCommand
 from app.core.config import settings
+from app.core.error_logger import log_error
 from app.storage.db import (
     add_bot_conversation,
     get_contacts_with_nickname,
@@ -117,9 +118,11 @@ class ChatHandler:
             try:
                 extracted = self.llm_client.extract_self_info(user_text)
                 if extracted:
-                    self.memory_manager.add_self_memory(extracted)
-            except Exception:
-                pass
+                    # 去重：若向量庫已有高度相似記憶（distance < 0.15），跳過寫入
+                    if not self.memory_manager.is_duplicate_self_memory(extracted):
+                        self.memory_manager.add_self_memory(extracted)
+            except Exception as e:
+                log_error(e, context="ChatHandler._async_extract", logger_name="bestieAI.chat_handler")
             finally:
                 if is_idle:
                     set_worker_status({

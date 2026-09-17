@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     # LLM 調用輸入與輸出明文日誌路徑
     LLM_LOG_PATH: Path = Field(default=Path("./logs/llm.log"))
 
+    # 錯誤日誌路徑（Rotating，5MB × 3 份）
+    ERROR_LOG_PATH: Path = Field(default=Path("./logs/error.log"))
+
     # 是否啟用 LLM 呼叫明文記錄（預設開啟，方便個人 debug 追蹤）
     ENABLE_LLM_LOG: bool = Field(default=True)
 
@@ -72,7 +75,7 @@ class Settings(BaseSettings):
 
     # 文字生成候選模型順序清單（逗號分隔，遇到 503 / 404 / 限速時自動依序降級切換）
     GEMINI_CANDIDATE_MODELS: str = Field(
-        default="gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite"
+        default="gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash"
     )
 
     # 全量歷史復盤卡 (summarize_history) 專用模型（預設 flash-lite 輕量穩定）

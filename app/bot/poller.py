@@ -40,6 +40,7 @@ from instagrapi.exceptions import LoginRequired
 
 from app.core.config import settings
 from app.core.security import require_whitelist
+from app.core.error_logger import log_error
 from app.services.session_service import SessionManager
 from app.services.ig_service import IGClient
 from app.bot.router import CommandRouter
@@ -221,6 +222,7 @@ class BotPoller:
                 )
             except Exception as ex:
                 logger.error(f"[Worker] 全量抓取 {target} 失敗: {ex}")
+                log_error(ex, context=f"BotPoller._task_worker_loop — 全量抓取 {target}", logger_name="bestieAI.bot_poller")
                 set_worker_status({
                     "running": False,
                     "target": target,
@@ -265,6 +267,7 @@ class BotPoller:
             result = self.router.handle_message_structured(text)
         except Exception as e:
             logger.error(f"處理訊息時發生未預期錯誤: {e}")
+            log_error(e, context="BotPoller._process_message", logger_name="bestieAI.bot_poller")
             if self.bot_ig:
                 self.bot_ig.send_message(thread_id, f"系統暫時忙碌或發生錯誤：{e}")
             return
@@ -287,6 +290,7 @@ class BotPoller:
                 reply_text = f"已追蹤 {target}，匯入 {info['inserted_messages']} 則訊息，關係摘要卡已建立。"
             except Exception as ex:
                 logger.error(f"Ingestion 失敗: {ex}")
+                log_error(ex, context=f"BotPoller.TRACK_REQUEST — {target}", logger_name="bestieAI.bot_poller")
                 reply_text = f"追蹤 {target} 失敗: {ex}"
             self.bot_ig.send_message(thread_id, reply_text)
 
@@ -351,6 +355,7 @@ class BotPoller:
                         reply_text = f"{target} 尚無對話紀錄可生成摘要卡。"
             except Exception as ex:
                 logger.error(f"更新摘要卡失敗: {ex}")
+                log_error(ex, context=f"BotPoller.REFRESH_SUMMARY_REQUEST — {target}", logger_name="bestieAI.bot_poller")
                 reply_text = f"更新 {target} 摘要卡失敗: {ex}"
             self.bot_ig.send_message(thread_id, reply_text)
 
@@ -400,6 +405,7 @@ class BotPoller:
                     )
                 except Exception as ex:
                     logger.error(f"全景歷史摘要失敗: {ex}")
+                    log_error(ex, context=f"BotPoller._async_full_summary — {target}", logger_name="bestieAI.bot_poller")
                     set_worker_status({
                         "running": False,
                         "target": target,
@@ -443,6 +449,7 @@ class BotPoller:
                 })
             except Exception as ex:
                 logger.error(f"同步失敗: {ex}")
+                log_error(ex, context=f"BotPoller.SYNC_REQUEST — {target}", logger_name="bestieAI.bot_poller")
                 reply_text = f"同步 {target} 失敗: {ex}"
                 set_worker_status({
                     "running": False,
@@ -499,6 +506,7 @@ class BotPoller:
                     )
                 except Exception as ex:
                     logger.error(f"重建向量庫失敗: {ex}")
+                    log_error(ex, context=f"BotPoller._async_rebuild — {target}", logger_name="bestieAI.bot_poller")
                     set_worker_status({
                         "running": False,
                         "target": target,
@@ -532,6 +540,7 @@ class BotPoller:
                     logger.info(f"自動保底更新了 {r['ig_account_id']} 的人物關係摘要卡。")
         except Exception as e:
             logger.error(f"定期檢查摘要更新失敗: {e}")
+            log_error(e, context="BotPoller._check_periodic_summaries", logger_name="bestieAI.bot_poller")
 
     def run(self) -> None:
         logger.info("正在啟動 Bot 服務...")

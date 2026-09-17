@@ -79,7 +79,7 @@ def test_shared_query_embedding_in_memory_service(tmp_path):
 
     mock_vector = MagicMock()
     fake_embedding = [0.5] * 768
-    mock_vector.get_embedding.return_value = fake_embedding
+    mock_vector.get_embeddings_batch.return_value = [fake_embedding]
     mock_vector.query.return_value = [{"text": "相關事件記憶條目"}]
 
     mock_self_vector = MagicMock()
@@ -88,20 +88,20 @@ def test_shared_query_embedding_in_memory_service(tmp_path):
     mem = MemoryManager(vector_store=mock_vector, self_vector_store=mock_self_vector, db_path=db_file)
     contact, summary, rag, recent, chat_hist, self_ctx = mem.get_full_context("明天要不要去夜市")
 
-    # 驗證 get_embedding 只被呼叫 1 次！
-    assert mock_vector.get_embedding.call_count == 1
+    # 驗證 get_embeddings_batch 只被呼叫 1 次（改用 batch API）
+    assert mock_vector.get_embeddings_batch.call_count == 1
     # 驗證 query 接收到了共享向量
     mock_vector.query.assert_called_once_with(
         contact_id=cid,
         query_text="明天要不要去夜市",
         query_embedding=fake_embedding,
-        n_results=settings.CONTACT_RAG_RESULTS
+        n_results=settings.CONTACT_RAG_RESULTS,
     )
     # 驗證 query_self 同樣接收到了共享向量
     mock_self_vector.query_self.assert_called_once_with(
         query_text="明天要不要去夜市",
         query_embedding=fake_embedding,
-        n_results=settings.SELF_RAG_RESULTS
+        n_results=settings.SELF_RAG_RESULTS,
     )
 
 

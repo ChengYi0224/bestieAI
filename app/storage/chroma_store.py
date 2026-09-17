@@ -105,9 +105,29 @@ class ChromaStore:
         query_text: str,
         n_results: int = 5,
         where: Optional[Dict[str, Any]] = None,
-        query_embedding: Optional[List[float]] = None
+        query_embedding: Optional[List[float]] = None,
+        contact_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        """執行向量相似度檢索（支援共享 query_embedding 避免重複計算）。"""
+        """執行向量相似度檢索（支援共享 query_embedding 避免重複計算）。
+
+        Args:
+            query_text: 查詢文字（當 query_embedding 未提供時用於計算向量）。
+            n_results: 回傳筆數上限。
+            where: ChromaDB where 過濾條件字典。
+            query_embedding: 預先計算的 query 向量（共享用）。
+            contact_id: 若提供，自動加入 contact_id 過濾（與 where 合併為 $and）。
+        """
+        # 建立完整 where 條件
+        contact_filter: Optional[Dict[str, Any]] = (
+            {"contact_id": int(contact_id)} if contact_id is not None else None
+        )
+        if contact_filter and where:
+            effective_where: Optional[Dict[str, Any]] = {"$and": [contact_filter, where]}
+        elif contact_filter:
+            effective_where = contact_filter
+        else:
+            effective_where = where
+
         if query_embedding is None:
             embeddings = self.get_embeddings_batch([query_text])
             query_embedding = embeddings[0] if embeddings else None
@@ -120,8 +140,8 @@ class ChromaStore:
             "n_results": n_results,
             "include": ["documents", "metadatas", "distances"]
         }
-        if where:
-            kwargs["where"] = where
+        if effective_where:
+            kwargs["where"] = effective_where
 
         results = self.collection.query(**kwargs)
         records = []
@@ -138,6 +158,7 @@ class ChromaStore:
                     "distance": results["distances"][0][i] if results.get("distances") else 0.0,
                 })
         return records
+
 
     def query_self(
         self,
