@@ -14,11 +14,15 @@ def router(tmp_path):
     return router
 
 def test_router_commands(router, tmp_path):
-    res = router.handle_message("track bob_123")
-    assert res == "TRACK_REQUEST:bob_123"
+    # 改用 handle_message_structured 驗證 action_type
+    res = router.handle_message_structured("track bob_123")
+    assert res.action_type == "TRACK_REQUEST"
+    assert res.data["target"] == "bob_123"
 
-    res_full = router.handle_message("track_full bob_123 2000")
-    assert res_full == "TRACK_FULL_REQUEST:bob_123:2000"
+    res_full = router.handle_message_structured("track_full bob_123 2000")
+    assert res_full.action_type == "TRACK_FULL_REQUEST"
+    assert res_full.data["target"] == "bob_123"
+    assert res_full.data["max_amount"] == 2000
 
     res = router.handle_message("select bob_123")
     assert "找不到" in res or "目前作用對象" in res
@@ -32,14 +36,17 @@ def test_router_commands(router, tmp_path):
     res_q = router.handle_message("query")
     assert "尚未選定" in res_q or "目前對話對象狀態" in res_q
 
-    res = router.handle_message("refresh_summary bob_123")
-    assert res == "REFRESH_SUMMARY_REQUEST:bob_123"
+    res = router.handle_message_structured("refresh_summary bob_123")
+    assert res.action_type == "REFRESH_SUMMARY_REQUEST"
+    assert res.data["target"] == "bob_123"
 
-    res = router.handle_message("summarize_history bob_123")
-    assert res == "SUMMARIZE_HISTORY_REQUEST:bob_123"
+    res = router.handle_message_structured("summarize_history bob_123")
+    assert res.action_type == "SUMMARIZE_HISTORY_REQUEST"
+    assert res.data["target"] == "bob_123"
 
-    res = router.handle_message("sync bob_123")
-    assert res == "SYNC_REQUEST:bob_123"
+    res = router.handle_message_structured("sync bob_123")
+    assert res.action_type == "SYNC_REQUEST"
+    assert res.data["target"] == "bob_123"
 
     # 測試 help 指令
     help_res = router.handle_message("help")
@@ -54,16 +61,25 @@ def test_router_commands(router, tmp_path):
 
 def test_router_short_aliases(router):
     """驗證所有指令短 alias 正確分發。"""
-    assert router.handle_message("t bob_123") == "TRACK_REQUEST:bob_123"
-    assert router.handle_message("tf bob_123 500") == "TRACK_FULL_REQUEST:bob_123:500"
-    assert router.handle_message("sy bob_123") == "SYNC_REQUEST:bob_123"
-    assert router.handle_message("sh bob_123") == "SUMMARIZE_HISTORY_REQUEST:bob_123"
-    assert router.handle_message("sum bob_123") == "SUMMARIZE_HISTORY_REQUEST:bob_123"
-    assert router.handle_message("rs bob_123") == "REFRESH_SUMMARY_REQUEST:bob_123"
-    assert router.handle_message("ref bob_123") == "REFRESH_SUMMARY_REQUEST:bob_123"
-    assert router.handle_message("rv bob_123") == "REBUILD_VECTORS_REQUEST:bob_123"
-    assert router.handle_message("rb bob_123") == "REBUILD_VECTORS_REQUEST:bob_123"
-    assert router.handle_message("ut bob_123") == "已將 bob_123 標記為停止追蹤。"
+    def sr(text):
+        return router.handle_message_structured(text)
+
+    assert sr("t bob_123").action_type == "TRACK_REQUEST"
+    assert sr("t bob_123").data["target"] == "bob_123"
+
+    r = sr("tf bob_123 500")
+    assert r.action_type == "TRACK_FULL_REQUEST"
+    assert r.data["target"] == "bob_123"
+    assert r.data["max_amount"] == 500
+
+    assert sr("sy bob_123").action_type == "SYNC_REQUEST"
+    assert sr("sh bob_123").action_type == "SUMMARIZE_HISTORY_REQUEST"
+    assert sr("sum bob_123").action_type == "SUMMARIZE_HISTORY_REQUEST"
+    assert sr("rs bob_123").action_type == "REFRESH_SUMMARY_REQUEST"
+    assert sr("ref bob_123").action_type == "REFRESH_SUMMARY_REQUEST"
+    assert sr("rv bob_123").action_type == "REBUILD_VECTORS_REQUEST"
+    assert sr("rb bob_123").action_type == "REBUILD_VECTORS_REQUEST"
+    assert "已將 bob_123 標記為停止追蹤。" in router.handle_message("ut bob_123")
     assert "尚未選定" in router.handle_message("st") or "目前對話對象狀態" in router.handle_message("st")
     assert "尚未追蹤" in router.handle_message("ls") or "已追蹤" in router.handle_message("ls")
     assert "尚未追蹤" in router.handle_message("l") or "已追蹤" in router.handle_message("l")

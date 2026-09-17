@@ -31,8 +31,11 @@ def test_poller_setup_realtime_contract():
 
 def test_poller_realtime_message_processing():
     """驗證真實 Realtime message 事件 payload 解析與分派"""
+    from app.commands.base import CommandResult
     mock_router = MagicMock()
-    mock_router.handle_message.return_value = "測試回覆"
+    mock_router.handle_message_structured.return_value = CommandResult(
+        success=True, message="測試回覆", action_type=None
+    )
 
     poller = BotPoller(router=mock_router)
     poller.allowed_main_pk = "22222"  # 設定授權主帳號 ID
@@ -54,7 +57,7 @@ def test_poller_realtime_message_processing():
     poller._on_realtime_message(event_payload)
 
     # 驗證 router 接收到正確指令
-    mock_router.handle_message.assert_called_with("help")
+    mock_router.handle_message_structured.assert_called_with("help")
     # 驗證發送回覆至正確的 thread
     mock_ig.send_message.assert_called_with("thread_abc_123", "測試回覆")
 
@@ -106,6 +109,7 @@ def test_poller_blocks_unauthorized_users():
 
 def test_poller_queue_boundaries():
     """驗證全量爬取工作隊列邊界防護：重複請求拒絕、不同對象進排程"""
+    from app.commands.base import CommandResult
     mock_router = MagicMock()
     poller = BotPoller(router=mock_router)
     poller.allowed_main_pk = "22222"
@@ -116,22 +120,27 @@ def test_poller_queue_boundaries():
     # 模擬任務 A 正在執行中
     poller._current_task = {"target": "user_a", "max_amount": 1000, "thread_id": "t1"}
 
-    # 1. 收到相同對象 user_a 的 track_full -> 直接拒絕並提示進度
-    mock_router.handle_message.return_value = "TRACK_FULL_REQUEST:user_a:1000"
+    # 1. 收到相同對象 user_a 的 track_full → 直接拒絕並提示進度
+    mock_router.handle_message_structured.return_value = CommandResult(
+        success=True, message="", action_type="TRACK_FULL_REQUEST",
+        data={"target": "user_a", "max_amount": 1000}
+    )
     poller._process_message("t1", "22222", "item_1", "track_full user_a")
     mock_ig.send_message.assert_called()
     args, _ = mock_ig.send_message.call_args
     assert "已有相同任務進行中" in args[1]
 
-    # 2. 收到不同對象 user_b 的 track_full -> 排入隊列
-    mock_router.handle_message.return_value = "TRACK_FULL_REQUEST:user_b:1000"
+    # 2. 收到不同對象 user_b 的 track_full → 排入隊列
+    mock_router.handle_message_structured.return_value = CommandResult(
+        success=True, message="", action_type="TRACK_FULL_REQUEST",
+        data={"target": "user_b", "max_amount": 1000}
+    )
     poller._process_message("t1", "22222", "item_2", "track_full user_b")
     assert "user_b" in poller._get_queued_targets()
     args, _ = mock_ig.send_message.call_args
     assert "已將 user_b 加入排程" in args[1]
 
-    # 3. 再次收到 user_b -> 提示已在排程中
+    # 3. 再次收到 user_b → 提示已在排程中
     poller._process_message("t1", "22222", "item_3", "track_full user_b")
     args, _ = mock_ig.send_message.call_args
     assert "已在排程名單中" in args[1]
-

@@ -1,11 +1,37 @@
 """
 ingestion_service.py — 對話資料匯入與管線調度服務（Ingestion Orchestration Service）。
+
+PIPELINE (L1):
+  [BaseSourceAdapter] ──fetch_messages()──► [NormalizedMessage 清單]
+                                                    │
+                                                    ▼
+                                          save_messages() (SQLite)
+                                                    │
+                                                    ▼
+                                          EventExtractor.extract_from_messages()
+                                                    │
+                                                    ▼ (時間感知對話切塊與微觀提煉)
+                                          EventClusterer.cluster()
+                                                    │
+                                                    ▼ (Complete Linkage 向量分群)
+                                          EventConsolidator.consolidate()
+                                                    │
+                                                    ▼ (批次無損融合)
+                                          save_contact_events() & ChromaStore
+                                                    │
+                                                    ▼
+                                          Summarizer.generate_concise_summary()
+                                                    │
+                                                    ▼
+                                          update_contact_summary() (SQLite)
+
 職責：
-- 作為高階調度器，協調整合四大專責管線：
-  1. app.pipelines.extraction.EventExtractor（時間感知對話切塊與提煉）
-  2. app.pipelines.clustering.EventClusterer（Complete Linkage 向量分群）
-  3. app.pipelines.consolidation.EventConsolidator（20 群批次無損融合）
-  4. app.pipelines.summarization.Summarizer（人物摘要卡與全景復盤）
+- 作為高階調度器，協調整合四大專責管線與資料來源適配器：
+  1. app.sources.base.BaseSourceAdapter（解耦資料來源：IG / 本地檔案 / LINE）
+  2. app.pipelines.extraction.EventExtractor（時間感知對話切塊與提煉）
+  3. app.pipelines.clustering.EventClusterer（Complete Linkage 向量分群）
+  4. app.pipelines.consolidation.EventConsolidator（20 群批次無損融合）
+  5. app.pipelines.summarization.Summarizer（人物摘要卡與全景復盤）
 - 負責對話重建與向量庫同步（rebuild_vectors）。
 """
 import time
@@ -54,30 +80,35 @@ class IngestionPipeline:
         self,
         vector_store: Optional[ChromaStore] = None,
         llm_client: Optional[Any] = None,
-        gemini_client: Optional[GeminiClient] = None
+        gemini_client: Optional[GeminiClient] = None,
+        # 子管線可從外部注入（測試替換 / 自訂實作），預設由 Pipeline 自建
+        extractor: Optional[Any] = None,
+        clusterer: Optional[Any] = None,
+        consolidator: Optional[Any] = None,
+        summarizer: Optional[Any] = None,
     ):
         self.vector_store = vector_store or ChromaStore()
         self.llm_client = llm_client
         self.gemini_client = gemini_client or GeminiClient()
 
-        # 初始化專責管線
-        self.clusterer = EventClusterer(
+        # 初始化專責管線（外部注入優先，否則自建）
+        self.clusterer = clusterer or EventClusterer(
             similarity_threshold=SIMILARITY_THRESHOLD,
             max_hours_gap=MAX_HOURS_GAP,
             max_cluster_size=MAX_CLUSTER_SIZE
         )
-        self.consolidator = EventConsolidator(
+        self.consolidator = consolidator or EventConsolidator(
             gemini_client=self.gemini_client,
             batch_size=CLUSTERS_CONSOLIDATION_BATCH_SIZE
         )
-        self.extractor = EventExtractor(
+        self.extractor = extractor or EventExtractor(
             gemini_client=self.gemini_client,
             target_batch_size=EVENT_EXTRACTION_BATCH_SIZE,
             max_batch_size=EVENT_EXTRACTION_MAX_SIZE,
             overlap_size=EVENT_EXTRACTION_OVERLAP_SIZE,
             session_gap_hours=EVENT_EXTRACTION_SESSION_GAP_HOURS
         )
-        self.summarizer = Summarizer(gemini_client=self.gemini_client)
+        self.summarizer = summarizer or Summarizer(gemini_client=self.gemini_client)
 
     @staticmethod
     def clean_text(raw_text: Optional[str]) -> str:
@@ -479,48 +510,48 @@ class IngestionPipeline:
 
     def run_full_ingestion(
         self,
-        ig_client: Any,
-        target_username: str,
+        source: Any = None,
+        target_username: str = "",
         max_amount: int = 5000,
         progress_callback: Optional[Any] = None,
-        db_path: Optional[Any] = None
+        db_path: Optional[Any] = None,
+        ig_client: Any = None,
     ) -> Dict[str, Any]:
-        """慢速防風控全量抓取指定對象的歷史訊息並重構向量庫。"""
+        """慢速防風控全量抓取指定對象的歷史訊息並重構向量庫（支援 BaseSourceAdapter 或 IGClient）。"""
         from app.storage.db import get_or_create_contact, save_messages, get_all_messages
-        thread = ig_client.get_thread_by_username(target_username)
-        if not thread:
-            raise ValueError(f"找不到與 {target_username} 的私訊對話串")
+        actual_source = source if source is not None else ig_client
+        if actual_source is None:
+            raise ValueError("必須提供 source 或 ig_client 參數。")
 
-        thread_id = str(thread.id)
-        raw_messages = ig_client.get_thread_messages(
-            thread_id=thread_id,
+        from app.sources.base import BaseSourceAdapter
+        if isinstance(actual_source, BaseSourceAdapter):
+            adapter = actual_source
+        else:
+            from app.sources.instagram import InstagramAdapter
+            adapter = InstagramAdapter(actual_source)
+
+        normalized_msgs = adapter.fetch_messages(
+            target=target_username,
             amount=max_amount,
-            min_delay=3.5,
-            max_delay=14.0,
-            batch_rest_pages=5,
-            batch_rest_seconds=35.0,
             progress_callback=progress_callback
         )
 
-        processed_msgs = []
-        me_pk = str(ig_client.client.user_id)
-
-        for m in raw_messages:
-            sender = "me" if str(m.user_id) == me_pk else "them"
-            content = self.clean_text(m.text)
-            processed_msgs.append({
-                "ig_item_id": str(m.id),
-                "sender": sender,
-                "content": content,
-                "sent_at": m.timestamp.isoformat()
-            })
+        processed_msgs = [
+            {
+                "ig_item_id": m.external_id,
+                "sender": m.sender,
+                "content": m.content,
+                "sent_at": m.sent_at
+            }
+            for m in normalized_msgs
+        ]
 
         contact_id = get_or_create_contact(ig_account_id=target_username, display_name=target_username, db_path=db_path)
         inserted_count = save_messages(contact_id=contact_id, messages=processed_msgs, db_path=db_path)
 
         if progress_callback:
             try:
-                progress_callback(f"私訊抓取完成 ({len(raw_messages)} 則)，已存入資料庫，準備重建向量記憶...")
+                progress_callback(f"訊息匯入完成 ({len(normalized_msgs)} 則)，已存入資料庫，準備重建向量記憶...")
             except Exception:
                 pass
 
@@ -549,11 +580,77 @@ class IngestionPipeline:
         return {
             "contact_id": contact_id,
             "target_username": target_username,
-            "downloaded_messages": len(raw_messages),
+            "downloaded_messages": len(normalized_msgs),
             "new_inserted_messages": inserted_count,
             "total_messages_in_db": len(all_msgs),
             "chunks_rebuilt": rebuild_res["chunks_rebuilt"],
             "summary_card": summary_card,
+        }
+
+    def run_ingestion(
+        self,
+        source: Any = None,
+        target_username: str = "",
+        amount: int = 100,
+        progress_callback: Optional[Any] = None,
+        db_path: Optional[Any] = None,
+        ig_client: Any = None,
+    ) -> Dict[str, Any]:
+        """首次追蹤快速匯入近期訊息（預設 100 則）。"""
+        actual_source = source if source is not None else ig_client
+        res = self.run_full_ingestion(
+            source=actual_source,
+            target_username=target_username,
+            max_amount=amount,
+            progress_callback=progress_callback,
+            db_path=db_path
+        )
+        return {
+            "inserted_messages": res["new_inserted_messages"],
+            **res
+        }
+
+    def sync_messages(
+        self,
+        source: Any = None,
+        target_username: str = "",
+        amount: int = 50,
+        progress_callback: Optional[Any] = None,
+        db_path: Optional[Any] = None,
+        ig_client: Any = None,
+    ) -> Dict[str, Any]:
+        """增量同步最新訊息並更新向量與摘要。"""
+        from app.storage.db import get_or_create_contact, save_messages
+        actual_source = source if source is not None else ig_client
+        if actual_source is None:
+            raise ValueError("必須提供 source 或 ig_client 參數。")
+
+        from app.sources.base import BaseSourceAdapter
+        if isinstance(actual_source, BaseSourceAdapter):
+            adapter = actual_source
+        else:
+            from app.sources.instagram import InstagramAdapter
+            adapter = InstagramAdapter(actual_source)
+
+        normalized_msgs = adapter.fetch_messages(
+            target=target_username,
+            amount=amount,
+            progress_callback=progress_callback
+        )
+        contact_id = get_or_create_contact(ig_account_id=target_username, display_name=target_username, db_path=db_path)
+        processed_msgs = [
+            {"ig_item_id": m.external_id, "sender": m.sender, "content": m.content, "sent_at": m.sent_at}
+            for m in normalized_msgs
+        ]
+        inserted_count = save_messages(contact_id=contact_id, messages=processed_msgs, db_path=db_path)
+        rebuild_info = self.rebuild_vectors(contact_id, progress_callback=progress_callback, db_path=db_path)
+        summary_updated = self.check_and_update_summary(contact_id, force=False, db_path=db_path) is not None
+        return {
+            "contact_id": contact_id,
+            "target_username": target_username,
+            "new_messages_count": inserted_count,
+            "chunks_added": rebuild_info["chunks_rebuilt"],
+            "summary_updated": summary_updated,
         }
 
     def build_full_history_summary(

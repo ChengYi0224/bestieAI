@@ -1,10 +1,32 @@
 """
 poller.py — MQTT 即時推播監聽與背景任務 Worker。
 
-功能：
-- 白名單授權防護 (@require_whitelist)
-- MQTT 雙向長連接監聽，被動即時喚醒
-- 背景單一執行緒隊列 Worker，任務間 60~120s 安全冷卻
+PIPELINE (L0 - End-to-End):
+  [使用者手機 IG App] ──MQTT 推播──► BotPoller._on_realtime_message()
+                                                │
+                                                ▼
+                                    CommandRouter.handle_message()
+                                                │
+                                    (解析為 Command 並派發至 CommandBus)
+                                                │
+                          ┌─────────────────────┴─────────────────────┐
+                          ▼                                           ▼
+                    一般指令 / 陪聊                              非同步任務
+                 (即時 CommandResult)                   (TRACK / TRACK_FULL / SYNC)
+                          │                                           │
+                          ▼                                           ▼
+                 self.bot_ig.send_message()                  _task_queue 排程隊列
+                                                                      │
+                                                                      ▼
+                                                               TaskWorker 執行緒
+                                                                      │
+                                                        SourceAdapterFactory.create()
+                                                                      │
+                                                                      ▼
+                                                        IngestionPipeline.run_full_ingestion()
+                                                                      │
+                                                                      ▼
+                                                        self.bot_ig.send_message() (完成通知)
 """
 import time
 import socket
@@ -22,6 +44,7 @@ from app.services.session_service import SessionManager
 from app.services.ig_service import IGClient
 from app.bot.router import CommandRouter
 from app.services.ingestion_service import IngestionPipeline
+from app.sources.factory import SourceAdapterFactory
 from app.storage.db import set_worker_status, get_worker_status, set_active_contact
 
 logger = logging.getLogger("bestieAI.bot_poller")
@@ -174,8 +197,9 @@ class BotPoller:
                 if self.main_ig is None:
                     main_client = self.session_manager.login("main")
                     self.main_ig = IGClient(main_client)
+                adapter = SourceAdapterFactory.create("instagram", ig_client=self.main_ig)
                 info = self.ingestion.run_full_ingestion(
-                    self.main_ig,
+                    adapter,
                     target,
                     max_amount=max_amt,
                     progress_callback=on_full_progress
@@ -238,7 +262,7 @@ class BotPoller:
 
         logger.info(f"[Realtime Push] 收到授權主帳號 ({user_id}) 訊息: {text}")
         try:
-            result = self.router.handle_message(text)
+            result = self.router.handle_message_structured(text)
         except Exception as e:
             logger.error(f"處理訊息時發生未預期錯誤: {e}")
             if self.bot_ig:
@@ -248,14 +272,17 @@ class BotPoller:
         if not self.bot_ig:
             return
 
-        if result.startswith("TRACK_REQUEST:"):
-            target = result.split(":", 1)[1]
+        action = result.action_type
+
+        if action == "TRACK_REQUEST":
+            target = result.data.get("target", "")
             self.bot_ig.send_message(thread_id, f"開始抓取與 {target} 的歷史訊息...")
             try:
                 if self.main_ig is None:
                     main_client = self.session_manager.login("main")
                     self.main_ig = IGClient(main_client)
-                info = self.ingestion.run_ingestion(self.main_ig, target)
+                adapter = SourceAdapterFactory.create("instagram", ig_client=self.main_ig)
+                info = self.ingestion.run_ingestion(adapter, target)
                 set_active_contact(target)
                 reply_text = f"已追蹤 {target}，匯入 {info['inserted_messages']} 則訊息，關係摘要卡已建立。"
             except Exception as ex:
@@ -263,9 +290,9 @@ class BotPoller:
                 reply_text = f"追蹤 {target} 失敗: {ex}"
             self.bot_ig.send_message(thread_id, reply_text)
 
-        elif result.startswith("TRACK_FULL_REQUEST:"):
-            _, target, max_amt_str = result.split(":", 2)
-            max_amt = int(max_amt_str)
+        elif action == "TRACK_FULL_REQUEST":
+            target = result.data.get("target", "")
+            max_amt = result.data.get("max_amount", 0)
             amt_label = f"上限 {max_amt} 則" if max_amt > 0 else "無限制"
 
             self._start_queue_worker()
@@ -308,8 +335,8 @@ class BotPoller:
                 f"可輸入 status 查詢進度。"
             )
 
-        elif result.startswith("REFRESH_SUMMARY_REQUEST:"):
-            target = result.split(":", 1)[1]
+        elif action == "REFRESH_SUMMARY_REQUEST":
+            target = result.data.get("target", "")
             self.bot_ig.send_message(thread_id, f"正在重新分析並更新 {target} 的人物關係摘要卡...")
             try:
                 from app.storage.db import get_contact_by_username
@@ -327,8 +354,8 @@ class BotPoller:
                 reply_text = f"更新 {target} 摘要卡失敗: {ex}"
             self.bot_ig.send_message(thread_id, reply_text)
 
-        elif result.startswith("SUMMARIZE_HISTORY_REQUEST:"):
-            target = result.split(":", 1)[1]
+        elif action == "SUMMARIZE_HISTORY_REQUEST":
+            target = result.data.get("target", "")
             self.bot_ig.send_message(
                 thread_id,
                 f"已在背景啟動 {target} 全景深度復盤分析。\n"
@@ -389,8 +416,8 @@ class BotPoller:
 
             threading.Thread(target=_async_full_summary, daemon=True).start()
 
-        elif result.startswith("SYNC_REQUEST:"):
-            target = result.split(":", 1)[1]
+        elif action == "SYNC_REQUEST":
+            target = result.data.get("target", "")
             self.bot_ig.send_message(thread_id, f"同步 {target} 最新訊息中...")
             set_worker_status({
                 "running": True,
@@ -404,7 +431,8 @@ class BotPoller:
                 if self.main_ig is None:
                     main_client = self.session_manager.login("main")
                     self.main_ig = IGClient(main_client)
-                sync_info = self.ingestion.sync_messages(self.main_ig, target)
+                adapter = SourceAdapterFactory.create("instagram", ig_client=self.main_ig)
+                sync_info = self.ingestion.sync_messages(adapter, target)
                 summary_msg = "（摘要卡已更新）" if sync_info["summary_updated"] else ""
                 reply_text = f"同步完成：新增 {sync_info['new_messages_count']} 則訊息，提煉 {sync_info['chunks_added']} 條事件記憶。{summary_msg}"
                 set_worker_status({
@@ -424,8 +452,8 @@ class BotPoller:
                 })
             self.bot_ig.send_message(thread_id, reply_text)
 
-        elif result.startswith("REBUILD_VECTORS_REQUEST:"):
-            target = result.split(":", 1)[1]
+        elif action == "REBUILD_VECTORS_REQUEST":
+            target = result.data.get("target", "")
             self.bot_ig.send_message(
                 thread_id,
                 f"已在背景啟動 {target} 向量庫重建。\n"
@@ -488,7 +516,7 @@ class BotPoller:
             threading.Thread(target=_async_rebuild, daemon=True).start()
 
         else:
-            self.bot_ig.send_message(thread_id, result)
+            self.bot_ig.send_message(thread_id, result.message)
 
     def _check_periodic_summaries(self) -> None:
         try:
