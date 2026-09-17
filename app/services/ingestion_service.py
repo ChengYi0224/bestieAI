@@ -364,6 +364,7 @@ class IngestionPipeline:
             get_contact_by_id,
             should_update_summary,
             get_recent_messages,
+            get_contact_events,
             update_contact_summary,
         )
         cid = contact_id
@@ -382,15 +383,36 @@ class IngestionPipeline:
         if not force and not should_update_summary(contact, threshold=thresh, days_limit=days_limit):
             return None
 
-        recent_msgs = get_recent_messages(cid, limit=50, db_path=db_path)
-        if not recent_msgs:
-            return None
+        # 優先取用已提煉的 consolidated 事件記憶 + 最近 20 則最新互動溫度
+        consolidated_events = get_contact_events(cid, status="consolidated", db_path=db_path)
+        recent_msgs = get_recent_messages(cid, limit=20, db_path=db_path)
 
-        formatted_lines = []
-        for m in recent_msgs:
-            sender_label = "我" if m["sender"] == "me" else "對方"
-            formatted_lines.append(f"[{m['sent_at']}] {sender_label}: {m['content']}")
-        conv_text = "\n".join(formatted_lines)
+        if consolidated_events:
+            sections = []
+            ev_lines = []
+            for ev in consolidated_events:
+                t_str = f"[{ev['start_time']}] " if ev["start_time"] else ""
+                ev_lines.append(f"- {t_str}{ev['content']}")
+            sections.append("【過往重要事件記憶（Consolidated Events）】:\n" + "\n".join(ev_lines))
+
+            if recent_msgs:
+                msg_lines = []
+                for m in recent_msgs:
+                    sender_label = "我" if m["sender"] == "me" else "對方"
+                    time_prefix = f"[{m['sent_at']}] " if m["sent_at"] else ""
+                    msg_lines.append(f"{time_prefix}{sender_label}: {m['content']}")
+                sections.append("【最近 20 則最新互動紀錄（即時氛圍與溫度）】:\n" + "\n".join(msg_lines))
+
+            payload_text = "\n\n".join(sections)
+        elif recent_msgs:
+            formatted_lines = []
+            for m in recent_msgs:
+                sender_label = "我" if m["sender"] == "me" else "對方"
+                time_prefix = f"[{m['sent_at']}] " if m["sent_at"] else ""
+                formatted_lines.append(f"{time_prefix}{sender_label}: {m['content']}")
+            payload_text = "\n".join(formatted_lines)
+        else:
+            return None
 
         display_name = contact.get("display_name") or contact.get("ig_account_id") or "對方"
         old_summary = contact.get("summary_card")
@@ -399,12 +421,14 @@ class IngestionPipeline:
             new_summary = self.llm_client.update_summary(
                 display_name=display_name,
                 old_summary=old_summary,
-                new_conversations_text=conv_text
+                new_conversations_text=payload_text
             )
         elif self.llm_client and hasattr(self.llm_client, "generate_summary"):
-            new_summary = self.llm_client.generate_summary(conv_text)
+            new_summary = self.llm_client.generate_summary(payload_text)
+        elif self.llm_client and hasattr(self.llm_client, "generate_concise_summary"):
+            new_summary = self.llm_client.generate_concise_summary(payload_text)
         else:
-            new_summary = self.summarizer.generate_concise_summary(conv_text)
+            new_summary = self.summarizer.generate_concise_summary(payload_text)
 
         update_contact_summary(cid, new_summary, db_path=db_path)
         return str(new_summary) if new_summary else None

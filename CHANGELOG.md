@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-09-18
+
+### Changed — 記憶組裝、摘要機制與 Prompt 全面升級
+
+**摘要卡生成機制升級（`ref` 與背景更新）**
+- `check_and_update_summary`（即 `ref` 指令）改為優先讀取資料庫中「所有 Consolidated 事件記憶」結合「最近 20 則最新私訊（含時間戳與發送者）」，解決摘要只看最近 50 則對話導致深層歷史被洗掉的記憶近視問題。
+- `summary.txt` 文本全面改版為結構化事實清單（關係現況、對方具體特徵、關鍵事件、互動策略），字數控制在 200~400 字，徹底淘汰舊版泛化散文。
+
+**陪聊 Prompt 迭代**
+- 修正 `companion.txt` 欄位定義，加入 `{display_name}`，更正 `recent_context` 描述為原始私訊流。
+- 新增 `companion_v2.txt` 與 `companion_v3.txt`，提供情感成熟、指出隱藏矛盾、語氣冷靜骨感且說完即止的新人格提示詞。
+
+**模型清單精簡**
+- 從聊天對話候選模型（`GEMINI_CANDIDATE_MODELS`）中移除 `gemini-3.5-flash-lite`，全面採用 flash 系列主流模型。
+
+### Added
+
+- `app/core/error_logger.py`：全域集中式錯誤日誌模組，以 5MB × 3 份 RotatingFileHandler 記錄至 `logs/error.log`。
+- `app/prompts/chat/companion_v2.txt`、`app/prompts/chat/companion_v3.txt`：成熟理性與深度共情版陪聊 Prompt。
+
+### Fixed
+
+- **修復向量檢索（RAG）失效**：`ChromaStore.query()` 補上 `contact_id` 參數與 `where` 條件自動組裝，解決靜默拋出 `TypeError` 導致檢索恆定顯示「向量檢索暫不可用」。
+- **修復 Embedding 呼叫方法**：`MemoryManager` 統一採用 `get_embeddings_batch([query])[0]`。
+- **自我記憶（Self-Memory）防重複**：`ChatHandler._async_extract` 寫入前增加語意相似度檢驗（cosine distance < 0.15 即略過），解決舊事實反覆重複累積寫入。
+- **自我記憶相關性過濾**：`MemoryManager.get_full_context` 加入距離門檻過濾，避免不相關的個人記憶碎片混入 Prompt。
+- **日誌追蹤覆蓋**：全面補齊 `memory_service`、`chat`、`poller`、`ingestion_service` 中的例外記錄至 `logs/error.log`。
+
 ## [0.4.0] - 2026-09-17
 
 ### Changed — Design Pattern 全面重構

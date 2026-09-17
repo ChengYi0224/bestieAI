@@ -19,6 +19,7 @@ from app.storage.db import (
     get_messages,
     update_contact_summary,
     get_active_contact,
+    get_contact_events,
 )
 
 logger = logging.getLogger("bestieAI.pipelines.summarization")
@@ -99,9 +100,33 @@ class Summarizer:
         if not force and len(new_msgs) < message_threshold:
             return False
 
-        recent_msgs = get_recent_messages(contact_id=contact_id, limit=200, db_path=db_path)
-        formatted = "\n".join(f"[{m['sent_at']}] {m['sender']}: {m['content']}" for m in recent_msgs)
-        summary = self.generate_concise_summary(formatted)
+        # 優先取用已提煉的 consolidated 事件記憶 + 最近 20 則最新互動溫度
+        consolidated_events = get_contact_events(contact_id, status="consolidated", db_path=db_path)
+        recent_msgs = get_recent_messages(contact_id=contact_id, limit=20, db_path=db_path)
+
+        if consolidated_events:
+            sections = []
+            ev_lines = []
+            for ev in consolidated_events:
+                t_str = f"[{ev['start_time']}] " if ev["start_time"] else ""
+                ev_lines.append(f"- {t_str}{ev['content']}")
+            sections.append("【過往重要事件記憶（Consolidated Events）】:\n" + "\n".join(ev_lines))
+
+            if recent_msgs:
+                msg_lines = []
+                for m in recent_msgs:
+                    sender_label = "我" if m["sender"] == "me" else "對方"
+                    time_prefix = f"[{m['sent_at']}] " if m["sent_at"] else ""
+                    msg_lines.append(f"{time_prefix}{sender_label}: {m['content']}")
+                sections.append("【最近 20 則最新互動紀錄（即時氛圍與溫度）】:\n" + "\n".join(msg_lines))
+
+            payload = "\n\n".join(sections)
+        elif recent_msgs:
+            payload = "\n".join(f"[{m['sent_at']}] {m['sender']}: {m['content']}" for m in recent_msgs)
+        else:
+            return False
+
+        summary = self.generate_concise_summary(payload)
         if summary:
             newest_id = max(m["id"] for m in all_msgs)
             update_contact_summary(contact_id, summary, newest_id, db_path=db_path)
