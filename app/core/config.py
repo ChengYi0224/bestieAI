@@ -78,16 +78,22 @@ class Settings(BaseSettings):
         default="gemini-3.8-flash,gemini-3.7-flash,gemini-3.6-flash"
     )
 
-    # 全量歷史復盤卡 (summarize_history) 專用模型（預設 flash-lite 輕量穩定）
-    GEMINI_FULL_SUMMARY_MODEL: str = Field(default="gemini-3.5-flash-lite")
+    # 候選模型輪換時，每個 Candidate Model 的最大 Retry 次數
+    GEMINI_MODEL_MAX_RETRIES: int = Field(default=2)
+
+    # 呼叫 Gemini API 的單次 Request Timeout 秒數
+    GEMINI_REQUEST_TIMEOUT: float = Field(default=30.0)
+
+    # 全量歷史復盤卡 (summarize_history) 專用模型
+    GEMINI_FULL_SUMMARY_MODEL: str = Field(default="gemini-3.8-flash")
 
     # 記憶條目萃取 (extract_events) 專用候選模型清單（優先使用 500 RPD 之輕量模型，依序降級）
     GEMINI_EVENT_EXTRACTION_MODELS: str = Field(
         default="gemini-3.5-flash-lite,gemini-3.1-flash-lite"
     )
 
-    # 自身記憶萃取 (extract_self_info) 專用預設模型（優先使用輕量 flash-lite 模型）
-    GEMINI_SELF_EXTRACT_MODEL: str = Field(default="gemini-3.5-flash-lite")
+    # 自身記憶萃取 (extract_self_info) 專用預設模型
+    GEMINI_SELF_EXTRACT_MODEL: str = Field(default="gemini-3.8-flash")
 
     # ==================== 記憶組裝與 RAG 檢索參數 ====================
     # 組裝提示詞時，載入與目前對象在 IG 上的近期原始對話則數

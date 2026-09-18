@@ -4,7 +4,7 @@ db.py — 資料庫連線、Schema 定義、自動遷移與平滑相容接口。
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from app.core.config import settings
 
 
@@ -184,6 +184,11 @@ def get_contact_by_username(ig_account_id: str, db_path: Optional[Path] = None) 
 def get_latest_message_time(contact_id: int, db_path: Optional[Path] = None) -> Optional[str]:
     from app.storage.repositories import MessageRepository
     return MessageRepository(db_path).get_latest_time(contact_id)
+
+
+def get_latest_item_ids(contact_id: int, limit: int = 50, db_path: Optional[Path] = None) -> Set[str]:
+    from app.storage.repositories import MessageRepository
+    return MessageRepository(db_path).get_latest_item_ids(contact_id, limit=limit)
 
 
 def update_contact_summary(contact_id: int, new_summary: str, db_path: Optional[Path] = None) -> None:

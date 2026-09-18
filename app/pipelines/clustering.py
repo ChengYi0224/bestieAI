@@ -11,30 +11,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from app.core.config import settings
-
-
-def parse_time_str(time_str: Optional[str]) -> Optional[datetime]:
-    """安全解析 ISO 或 YYYY-MM-DD 格式時間字串。"""
-    if not time_str:
-        return None
-    try:
-        return datetime.fromisoformat(time_str)
-    except Exception:
-        pass
-    try:
-        return datetime.strptime(time_str[:10], "%Y-%m-%d")
-    except Exception:
-        return None
-
-
-def cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
-    """計算兩向量之餘弦相似度。"""
-    dot = sum(a * b for a, b in zip(vec_a, vec_b))
-    norm_a = sum(a * a for a in vec_a) ** 0.5
-    norm_b = sum(b * b for b in vec_b) ** 0.5
-    if norm_a == 0.0 or norm_b == 0.0:
-        return 0.0
-    return dot / (norm_a * norm_b)
+from app.utils import parse_time_str, cosine_similarity
 
 
 class EventClusterer:

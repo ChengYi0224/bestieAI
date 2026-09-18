@@ -17,3 +17,6 @@ dependencies = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+markers = [
+    "external: marks tests as external API live tests (deselect with -m 'not external', require -E / --external)",
+]

@@ -18,9 +18,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from google import genai
+from google.genai import types
 
 from app.core.config import settings
 from app.core.rate_limit import gemini_retry, _is_gemini_retryable_error
+from app.clients.gemini import GeminiClient, GeminiKeyRing
 
 logger = logging.getLogger("bestieAI.llm_service")
 
@@ -42,8 +44,8 @@ CANDIDATE_MODELS: List[str] = [
     "gemini-3.6-flash",
 ]
 
-# 自身記憶萃取 (extract_self_info) 預設專用模型（優先使用 500 RPD 輕量穩定模型）
-DEFAULT_SELF_EXTRACT_MODEL: str = getattr(settings, "GEMINI_SELF_EXTRACT_MODEL", "gemini-3.5-flash-lite")
+# 自身記憶萃取 (extract_self_info) 預設專用模型
+DEFAULT_SELF_EXTRACT_MODEL: str = getattr(settings, "GEMINI_SELF_EXTRACT_MODEL", "gemini-3.8-flash")
 
 _llm_file_handler: Optional[logging.FileHandler] = None
 
@@ -133,56 +135,69 @@ class LLMClient:
         self,
         api_key: Optional[str] = None,
         candidate_models: Optional[List[str]] = None,
-        log_path: Optional[Path] = None
+        log_path: Optional[Path] = None,
+        gemini_client: Optional[GeminiClient] = None,
     ):
         if api_key:
             self.api_key = api_key.strip().strip("'\"").strip()
-        elif settings.api_keys_list:
-            self.api_key = settings.api_keys_list[0]
+            key_ring = GeminiKeyRing(keys=[self.api_key])
+            self.gemini_client = gemini_client or GeminiClient(key_ring=key_ring)
         else:
-            self.api_key = (settings.GEMINI_API_KEY or "").strip().strip("'\"").strip()
+            self.api_key = None
+            self.gemini_client = gemini_client or GeminiClient()
+
         self.candidate_models = candidate_models or settings.candidate_models_list
         self.log_path = log_path or settings.LLM_LOG_PATH
         self._client = None
 
     @property
     def client(self) -> genai.Client:
-        if self._client is None:
-            if not self.api_key:
-                raise ValueError("GEMINI_API_KEY is not set in environment or .env")
-            self._client = genai.Client(api_key=self.api_key)
-        return self._client
+        if self._client is not None:
+            return self._client
+        return self.gemini_client.key_ring.get_client()
 
-    @gemini_retry(max_short_retries=2, base_delay=1.5)
     def _call_model(self, model: str, prompt: str) -> str:
-        start_t = time.time()
-        try:
-            response = self.client.models.generate_content(
-                model=model,
-                contents=prompt
-            )
-            out_text = response.text or ""
-            usage = getattr(response, "usage_metadata", None)
-            log_llm_call(
-                model=model,
-                prompt=prompt,
-                output=out_text,
-                duration_sec=time.time() - start_t,
-                log_path=self.log_path,
-                prompt_tokens=getattr(usage, "prompt_token_count", None) if usage else None,
-                candidate_tokens=getattr(usage, "candidates_token_count", None) if usage else None,
-                total_tokens=getattr(usage, "total_token_count", None) if usage else None,
-            )
-            return out_text
-        except Exception as e:
-            log_llm_call(
-                model=model,
-                prompt=prompt,
-                error=e,
-                duration_sec=time.time() - start_t,
-                log_path=self.log_path
-            )
-            raise
+        """單一模型呼叫（若存在 Mock Client 則使用 Mock，否則 Delegate 給 GeminiClient）。"""
+        if self._client is not None:
+            start_t = time.time()
+            try:
+                gen_config = types.GenerateContentConfig(
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                    http_options=types.HttpOptions(timeout=int(settings.GEMINI_REQUEST_TIMEOUT * 1000)),
+                )
+                response = self._client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=gen_config,
+                )
+                out_text = response.text or ""
+                usage = getattr(response, "usage_metadata", None)
+                log_llm_call(
+                    model=model,
+                    prompt=prompt,
+                    output=out_text,
+                    duration_sec=time.time() - start_t,
+                    log_path=self.log_path,
+                    prompt_tokens=getattr(usage, "prompt_token_count", None) if usage else None,
+                    candidate_tokens=getattr(usage, "candidates_token_count", None) if usage else None,
+                    total_tokens=getattr(usage, "total_token_count", None) if usage else None,
+                )
+                return out_text
+            except Exception as e:
+                log_llm_call(
+                    model=model,
+                    prompt=prompt,
+                    error=e,
+                    duration_sec=time.time() - start_t,
+                    log_path=self.log_path
+                )
+                raise
+
+        return self.gemini_client.generate_text(
+            prompt=prompt,
+            preferred_model=model,
+            candidate_models=self.candidate_models,
+        )
 
     def _generate_with_fallback(
         self,
@@ -190,26 +205,32 @@ class LLMClient:
         preferred_model: Optional[str] = None,
         candidate_models: Optional[List[str]] = None
     ) -> str:
-        """
-        依序嘗試候選模型陣列，若遇到 503 過載、404 不支援或速率限制，自動依序切換降級至下一個模型。
-        """
-        base_models = candidate_models or self.candidate_models
-        models_to_try = list(base_models)
-        if preferred_model:
-            if preferred_model in models_to_try:
-                models_to_try.remove(preferred_model)
-            models_to_try.insert(0, preferred_model)
+        """依序嘗試候選模型，Delegate 給 GeminiClient 執行文字生成。"""
+        if self._client is not None:
+            base_models = candidate_models or self.candidate_models
+            models_to_try = list(base_models)
+            if preferred_model:
+                if preferred_model in models_to_try:
+                    models_to_try.remove(preferred_model)
+                models_to_try.insert(0, preferred_model)
 
-        last_error = None
-        for model_name in models_to_try:
-            try:
-                logger.info(f"嘗試使用模型: {model_name}")
-                return self._call_model(model_name, prompt)
-            except Exception as e:
-                last_error = e
-                logger.warning(f"模型 {model_name} 呼叫失敗 ({e})，嘗試下一個候選模型...")
+            last_error = None
+            for model_name in models_to_try:
+                try:
+                    logger.info(f"嘗試使用模型: {model_name}")
+                    return self._call_model(model_name, prompt)
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"模型 {model_name} 呼叫失敗 ({e})，嘗試下一個候選模型...")
 
-        raise RuntimeError(f"所有候選模型皆嘗試失敗: {models_to_try}，最後錯誤: {last_error}")
+            raise RuntimeError(f"所有候選模型皆嘗試失敗: {models_to_try}，最後錯誤: {last_error}")
+
+        candidates = candidate_models or self.candidate_models
+        return self.gemini_client.generate_text(
+            prompt=prompt,
+            preferred_model=preferred_model,
+            candidate_models=candidates,
+        )
 
     def generate_reply(
         self,
@@ -240,7 +261,7 @@ class LLMClient:
         """從使用者提問中萃取自身生活近況、事實、習慣或偏好。若無則回傳空字串。"""
         template = EXTRACT_SELF_PROMPT_PATH.read_text(encoding="utf-8")
         prompt = template.format(user_query=user_query)
-        target_model = model or DEFAULT_SELF_EXTRACT_MODEL
+        target_model = model or (self.candidate_models[0] if self.candidate_models else DEFAULT_SELF_EXTRACT_MODEL)
         result = self._generate_with_fallback(prompt, preferred_model=target_model).strip()
         if not result or result == "無" or result.startswith("無。") or result.startswith("無\n"):
             return ""

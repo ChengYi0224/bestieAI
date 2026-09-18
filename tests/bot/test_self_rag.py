@@ -88,7 +88,12 @@ def test_llm_extract_self_info():
     client._generate_with_fallback.assert_called_once()
     _, kwargs = client._generate_with_fallback.call_args
     assert kwargs.get("preferred_model") == DEFAULT_SELF_EXTRACT_MODEL
-    assert DEFAULT_SELF_EXTRACT_MODEL == "gemini-3.5-flash-lite"
+    assert DEFAULT_SELF_EXTRACT_MODEL == "gemini-3.8-flash"
+
+    # 驗證傳參 model 時優先使用指定模型
+    client.extract_self_info("我最近在準備托福", model="custom-model")
+    _, custom_kwargs = client._generate_with_fallback.call_args
+    assert custom_kwargs.get("preferred_model") == "custom-model"
 
     # 測試模型若回傳 * 或 • 條列時，會自動正規化為 -
     client._generate_with_fallback = MagicMock(return_value="* 使用者換了新工作\n• 下週準備去日本")

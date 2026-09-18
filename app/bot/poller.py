@@ -59,7 +59,6 @@ class BotPoller:
         ingestion: Optional[IngestionPipeline] = None
     ):
         self.session_manager = session_manager or SessionManager()
-        self.router = router or CommandRouter()
         self.ingestion = ingestion or IngestionPipeline()
         self.seen_message_ids: Set[str] = set()
         self.running: bool = False
@@ -68,9 +67,43 @@ class BotPoller:
         self.main_ig: Optional[IGClient] = None
         self.allowed_main_pk: Optional[str] = settings.MAIN_ACCOUNT_USER_ID or None
 
+        if router is not None:
+            self.router = router
+            if getattr(self.router, "sync_callback", None) is None:
+                self.router.sync_callback = self._sync_contact_messages
+                if hasattr(self.router, "service") and hasattr(self.router.service, "_chat"):
+                    self.router.service._chat.sync_callback = self._sync_contact_messages
+        else:
+            self.router = CommandRouter(sync_callback=self._sync_contact_messages)
+
         self._task_queue: queue.Queue = queue.Queue()
         self._current_task: Optional[Dict[str, Any]] = None
         self._worker_thread: Optional[threading.Thread] = None
+
+    def _sync_contact_messages(self, target_username: str) -> int:
+        """從 Instagram 同步指定對象之最新私訊至 SQLite 資料庫（不設數量上限）。"""
+        if not target_username:
+            return 0
+        try:
+            if self.main_ig is None:
+                main_client = self.session_manager.login("main")
+                self.main_ig = IGClient(main_client)
+            from app.storage.db import get_or_create_contact, save_messages, get_latest_item_ids
+            contact_id = get_or_create_contact(ig_account_id=target_username, display_name=target_username)
+            existing_ids = get_latest_item_ids(contact_id=contact_id, limit=50)
+            adapter = SourceAdapterFactory.create("instagram", ig_client=self.main_ig)
+            normalized_msgs = adapter.fetch_messages(target=target_username, amount=0, stop_item_ids=existing_ids)
+            processed_msgs = [
+                {"ig_item_id": m.external_id, "sender": m.sender, "content": m.content, "sent_at": m.sent_at}
+                for m in normalized_msgs
+            ]
+            inserted = save_messages(contact_id=contact_id, messages=processed_msgs)
+            logger.info(f"Auto-Sync 完成：{target_username} 獲取 {len(normalized_msgs)} 則，新增 {inserted} 則私訊。")
+            return inserted
+        except Exception as e:
+            logger.warning(f"Auto-Sync 同步 {target_username} 失敗 ({e})，Fallback 使用資料庫現有紀錄。")
+            log_error(e, context=f"BotPoller._sync_contact_messages — {target_username}", logger_name="bestieAI.bot_poller")
+            return 0
 
     def _resolve_main_pk(self) -> None:
         """動態取得主帳號的 Instagram PK (User ID)。"""

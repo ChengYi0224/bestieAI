@@ -23,7 +23,7 @@ PIPELINE (L0 → L1):
 - 委託 CommandParserRegistry 查表解析，自身不含任何 if-else 分支。
 - 將 CommandResult 格式化為給 IG 私訊傳送的訊息字串（向後相容）。
 """
-from typing import Optional, Any
+from typing import Optional, Any, Callable
 
 from app.commands.base import BaseCommand, CommandResult
 from app.commands.bus import CommandBus
@@ -53,16 +53,23 @@ class CommandRouter:
         llm_client: Optional[LLMClient] = None,
         db_path: Optional[Any] = None,
         command_bus: Optional[CommandBus] = None,
+        sync_callback: Optional[Callable[[str], Any]] = None,
+        model: Optional[str] = None,
+        self_extract_model: Optional[str] = None,
     ):
         # 根組合點：只在 Router 層建立依賴，往下傳入 CommandService
         mm = memory_manager or MemoryManager()
         lc = llm_client or LLMClient()
         self.db_path = db_path
+        self.sync_callback = sync_callback
 
         self.service = CommandService(
             memory_manager=mm,
             llm_client=lc,
             db_path=self.db_path,
+            sync_callback=self.sync_callback,
+            model=model,
+            self_extract_model=self_extract_model,
         )
         self.bus = command_bus or create_default_command_bus(self.service)
 

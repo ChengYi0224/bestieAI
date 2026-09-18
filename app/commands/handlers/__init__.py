@@ -6,7 +6,7 @@ CommandService 是向後相容的薄層 Facade：
   - 將所有 handle_* 方法代理至對應的子 Handler
   - 現有呼叫 from app.commands.handlers import CommandService 完全不受影響
 """
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 
 from app.services.memory_service import MemoryManager
 from app.services.llm_service import LLMClient
@@ -48,6 +48,9 @@ class CommandService:
         memory_manager: Optional[MemoryManager] = None,
         llm_client: Optional[LLMClient] = None,
         db_path: Optional[Any] = None,
+        sync_callback: Optional[Callable[[str], Any]] = None,
+        model: Optional[str] = None,
+        self_extract_model: Optional[str] = None,
     ):
         # 根組合點：只在這裡建立依賴，子 Handler 從外部接收
         mm = memory_manager or MemoryManager()
@@ -56,7 +59,14 @@ class CommandService:
         self._help = HelpHandler()
         self._contact = ContactHandler(db_path=db_path)
         self._memory = MemoryHandler(memory_manager=mm, db_path=db_path)
-        self._chat = ChatHandler(memory_manager=mm, llm_client=lc, db_path=db_path)
+        self._chat = ChatHandler(
+            memory_manager=mm,
+            llm_client=lc,
+            db_path=db_path,
+            sync_callback=sync_callback,
+            model=model,
+            self_extract_model=self_extract_model,
+        )
         self._follower = FollowerHandler()
 
         # 向後相容屬性

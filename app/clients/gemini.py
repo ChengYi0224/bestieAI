@@ -10,6 +10,7 @@ import logging
 import threading
 from typing import List, Optional, Dict, Any
 from google import genai
+from google.genai import types
 from google.genai.errors import APIError
 
 from app.core.config import settings
@@ -85,7 +86,7 @@ class GeminiKeyRing:
 
 
 class GeminiClient:
-    """封裝 Gemini 遠端呼叫（支援多 Key 輪換、自適應重試、純傳輸）。"""
+    """封裝 Gemini 外部呼叫（支援多組 API Key 輪換、Retry 與傳輸）。"""
 
     def __init__(self, key_ring: Optional[GeminiKeyRing] = None):
         self.key_ring = key_ring or GeminiKeyRing()
@@ -95,9 +96,14 @@ class GeminiClient:
         prompt: str,
         preferred_model: Optional[str] = None,
         candidate_models: Optional[List[str]] = None,
-        max_retries: int = 3
+        max_retries: Optional[int] = None,
+        timeout: Optional[float] = None,
+        disable_thinking: bool = True,
     ) -> str:
-        """呼叫文字生成 API（遇到 429 或無效 Key 自動輪換下一把 Key 與退避重試）。"""
+        """呼叫文字生成 API（遇到 429 或無效 Key 自動切換下一組 Key 並進行 Retry）。"""
+        retries = max_retries if max_retries is not None else getattr(settings, "GEMINI_MODEL_MAX_RETRIES", 2)
+        req_timeout = timeout if timeout is not None else getattr(settings, "GEMINI_REQUEST_TIMEOUT", 30.0)
+
         models = []
         if preferred_model:
             models.append(preferred_model)
@@ -106,14 +112,23 @@ class GeminiClient:
         seen = set()
         dedup_models = [m for m in models if not (m in seen or seen.add(m))]
 
+        total_attempts = 1 + retries
         start_t = time.time()
         for model in dedup_models:
-            for attempt in range(max_retries):
+            for attempt in range(total_attempts):
                 key = self.key_ring.get_available_key()
                 client = self.key_ring.get_client(key)
                 call_start = time.time()
                 try:
-                    res = client.models.generate_content(model=model, contents=prompt)
+                    config = types.GenerateContentConfig(
+                        thinking_config=types.ThinkingConfig(thinking_budget=0) if disable_thinking else None,
+                        http_options=types.HttpOptions(timeout=int(req_timeout * 1000)),
+                    )
+                    res = client.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config=config,
+                    )
                     out_text = res.text or ""
                     usage = getattr(res, "usage_metadata", None)
                     p_tok = getattr(usage, "prompt_token_count", None) if usage else None
@@ -147,10 +162,10 @@ class GeminiClient:
                         self.key_ring.mark_cooldown(key, cooldown_seconds=cooldown_sec)
                         if is_invalid:
                             logger.error(f"Gemini API Key (***{key[-4:] if len(key) >= 4 else '***'}) 格式或憑證無效，已排除: {e}")
-                        if attempt < max_retries - 1:
+                        if attempt < total_attempts - 1:
                             continue
-                    logger.warning(f"模型 {model} 呼叫失敗 (嘗試 {attempt + 1}/{max_retries}): {e}")
-                    if attempt < max_retries - 1:
+                    logger.warning(f"模型 {model} 呼叫失敗 (嘗試 {attempt + 1}/{total_attempts}): {e}")
+                    if attempt < total_attempts - 1:
                         time.sleep(2.0)
 
         raise RuntimeError(f"所有候選模型及 API Key 均呼叫失敗: {dedup_models}")

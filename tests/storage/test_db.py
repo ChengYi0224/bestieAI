@@ -78,3 +78,20 @@ def test_update_contact_summary(temp_db):
     assert contact["summary_card"] == "這是新的摘要卡內容"
     assert contact["new_messages_since_summary"] == 0
     assert contact["summary_updated_at"] is not None
+
+
+def test_get_latest_item_ids(temp_db):
+    from app.storage.db import get_latest_item_ids
+    cid = get_or_create_contact("stop_test", "Stop Test", db_path=temp_db)
+    save_messages(cid, [
+        {"ig_item_id": "item_101", "sender": "me", "content": "m1", "sent_at": "2026-09-19T01:00:00Z"},
+        {"ig_item_id": "item_102", "sender": "them", "content": "m2", "sent_at": "2026-09-19T02:00:00Z"},
+        {"ig_item_id": "item_103", "sender": "them", "content": "m3", "sent_at": "2026-09-19T03:00:00Z"},
+    ], db_path=temp_db)
+
+    ids = get_latest_item_ids(cid, limit=2, db_path=temp_db)
+    assert len(ids) == 2
+    assert "item_103" in ids
+    assert "item_102" in ids
+    assert "item_101" not in ids
+

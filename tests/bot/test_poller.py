@@ -144,3 +144,47 @@ def test_poller_queue_boundaries():
     poller._process_message("t1", "22222", "item_3", "track_full user_b")
     args, _ = mock_ig.send_message.call_args
     assert "已在排程名單中" in args[1]
+
+
+def test_poller_sync_contact_messages(monkeypatch):
+    """驗證 BotPoller._sync_contact_messages 以 amount=0 呼叫 adapter 並寫入訊息至資料庫。"""
+    from unittest.mock import patch
+    from app.sources.base import NormalizedMessage
+
+    poller = BotPoller(router=MagicMock())
+    poller.main_ig = MagicMock()
+
+    mock_msgs = [
+        NormalizedMessage(
+            source_type="instagram",
+            external_id="ext_1",
+            sender="them",
+            content="最新私訊內容",
+            sent_at="2026-09-19T00:00:00Z"
+        )
+    ]
+
+    mock_adapter = MagicMock()
+    mock_adapter.fetch_messages.return_value = mock_msgs
+
+    with patch("app.sources.SourceAdapterFactory.create", return_value=mock_adapter) as mock_factory, \
+         patch("app.storage.db.get_or_create_contact", return_value=42) as mock_get_contact, \
+         patch("app.storage.db.get_latest_item_ids", return_value={"ext_known"}) as mock_get_ids, \
+         patch("app.storage.db.save_messages", return_value=1) as mock_save:
+
+        inserted = poller._sync_contact_messages("target_u")
+
+        assert inserted == 1
+        mock_factory.assert_called_once_with("instagram", ig_client=poller.main_ig)
+        mock_adapter.fetch_messages.assert_called_once_with(target="target_u", amount=0, stop_item_ids={"ext_known"})
+        mock_get_contact.assert_called_once_with(ig_account_id="target_u", display_name="target_u")
+        mock_save.assert_called_once_with(
+            contact_id=42,
+            messages=[{
+                "ig_item_id": "ext_1",
+                "sender": "them",
+                "content": "最新私訊內容",
+                "sent_at": "2026-09-19T00:00:00Z"
+            }]
+        )
+

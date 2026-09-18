@@ -43,6 +43,7 @@ from app.core.config import settings
 from app.core.error_logger import log_error
 from app.clients.gemini import GeminiClient
 from app.storage.chroma_store import ChromaStore, VectorStore
+from app.utils import parse_time_str, cosine_similarity, clean_message_text
 from app.storage.db import (
     get_active_contact,
     get_messages,
@@ -113,18 +114,11 @@ class IngestionPipeline:
 
     @staticmethod
     def clean_text(raw_text: Optional[str]) -> str:
-        if not raw_text:
-            return "[圖片/貼圖/非文字訊息]"
-        cleaned = raw_text.strip()
-        return cleaned if cleaned else "[圖片/貼圖/非文字訊息]"
+        return clean_message_text(raw_text, default="[圖片/貼圖/非文字訊息]")
 
     @staticmethod
     def _parse_time(time_str: str) -> Optional[datetime]:
-        try:
-            clean_str = time_str.replace("Z", "+00:00")
-            return datetime.fromisoformat(clean_str)
-        except Exception:
-            return None
+        return parse_time_str(time_str)
 
     @staticmethod
     def chunk_messages(messages: List[Dict[str, Any]], max_chunk_size: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -256,8 +250,8 @@ class IngestionPipeline:
     def _cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
         return cosine_similarity(vec_a, vec_b)
 
-    def _parse_time_str(self, time_str: Optional[str]) -> Optional[datetime]:
-        from app.pipelines.clustering import parse_time_str
+    @staticmethod
+    def _parse_time_str(time_str: Optional[str]) -> Optional[datetime]:
         return parse_time_str(time_str)
 
     def cluster_similar_events(
@@ -647,10 +641,13 @@ class IngestionPipeline:
         ig_client: Any = None,
     ) -> Dict[str, Any]:
         """增量同步最新訊息並更新向量與摘要。"""
-        from app.storage.db import get_or_create_contact, save_messages
+        from app.storage.db import get_or_create_contact, save_messages, get_latest_item_ids
         actual_source = source if source is not None else ig_client
         if actual_source is None:
             raise ValueError("必須提供 source 或 ig_client 參數。")
+
+        contact_id = get_or_create_contact(ig_account_id=target_username, display_name=target_username, db_path=db_path)
+        existing_ids = get_latest_item_ids(contact_id=contact_id, limit=50, db_path=db_path)
 
         from app.sources.base import BaseSourceAdapter
         if isinstance(actual_source, BaseSourceAdapter):
@@ -662,9 +659,9 @@ class IngestionPipeline:
         normalized_msgs = adapter.fetch_messages(
             target=target_username,
             amount=amount,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            stop_item_ids=existing_ids,
         )
-        contact_id = get_or_create_contact(ig_account_id=target_username, display_name=target_username, db_path=db_path)
         processed_msgs = [
             {"ig_item_id": m.external_id, "sender": m.sender, "content": m.content, "sent_at": m.sent_at}
             for m in normalized_msgs

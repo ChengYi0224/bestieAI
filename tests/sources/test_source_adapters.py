@@ -228,3 +228,35 @@ def test_ingestion_pipeline_with_custom_adapter(tmp_path):
         amount=5000,
         progress_callback=None
     )
+
+
+def test_ig_client_early_stopping():
+    """驗證 IGClient.get_thread_messages 偵測到 stop_item_ids 時立即中斷翻頁。"""
+    from app.clients.instagram import IGClient
+
+    mock_client = MagicMock()
+    # 模擬 IG API 回傳一頁訊息，其中第 2 則即為已知 ID
+    mock_client.private_request.return_value = {
+        "thread": {
+            "items": [
+                {"id": "msg_new_2", "item_id": "msg_new_2", "user_id": 123, "text": "最新訊息", "timestamp": 1700000002000000},
+                {"id": "msg_known_1", "item_id": "msg_known_1", "user_id": 123, "text": "已知舊訊息", "timestamp": 1700000001000000},
+                {"id": "msg_older", "item_id": "msg_older", "user_id": 123, "text": "更早訊息", "timestamp": 1700000000000000},
+            ],
+            "oldest_cursor": "cursor_page_2"
+        }
+    }
+
+    ig = IGClient(mock_client)
+    # 提供已知 ID 集合
+    messages = ig.get_thread_messages(
+        thread_id="t123",
+        amount=0,
+        stop_item_ids={"msg_known_1"}
+    )
+
+    # 應只抓到已知 ID 之前的最新訊息（共 1 則），且不應發送第 2 次 private_request
+    assert len(messages) == 1
+    assert messages[0].id == "msg_new_2"
+    assert mock_client.private_request.call_count == 1
+

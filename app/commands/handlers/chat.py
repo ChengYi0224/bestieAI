@@ -21,10 +21,11 @@ PIPELINE (L2):
        ▼
   CommandResult(success=True, message=reply)
 """
+import logging
 import time
 import threading
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 
 from app.commands.base import CommandResult
 from app.commands.commands import ChatCommand
@@ -35,9 +36,12 @@ from app.storage.db import (
     get_contacts_with_nickname,
     get_worker_status,
     set_worker_status,
+    get_active_contact,
 )
 from app.services.memory_service import MemoryManager
 from app.services.llm_service import LLMClient
+
+logger = logging.getLogger("bestieAI.chat_handler")
 
 
 class ChatHandler:
@@ -48,13 +52,31 @@ class ChatHandler:
         memory_manager: MemoryManager,
         llm_client: LLMClient,
         db_path: Optional[Any] = None,
+        sync_callback: Optional[Callable[[str], Any]] = None,
+        model: Optional[str] = None,
+        self_extract_model: Optional[str] = None,
     ):
         self.memory_manager = memory_manager
         self.llm_client = llm_client
         self.db_path = db_path
+        self.sync_callback = sync_callback
+        self.model = model
+        self.self_extract_model = self_extract_model
 
     def handle_chat(self, cmd: ChatCommand) -> CommandResult:
         user_text = cmd.text
+
+        # 聊天前檢查並自動執行訊息同步（Auto-Sync）
+        if self.sync_callback:
+            try:
+                from app.utils import get_row_field
+                active = get_active_contact(db_path=self.db_path)
+                target_id = get_row_field(active, "ig_account_id")
+                if target_id:
+                    self.sync_callback(target_id)
+            except Exception as e:
+                logger.warning(f"自動同步訊息失敗，Fallback 使用本地既有紀錄: {e}")
+
         ctx = self.memory_manager.get_full_context(user_text)
         if not ctx or not ctx[0]:
             return CommandResult(
@@ -96,13 +118,15 @@ class ChatHandler:
             chat_history=chat_history,
             self_context=self_context,
             cross_rag=cross_rag_str,
-            user_query=user_text
+            user_query=user_text,
+            model=self.model,
         )
 
         add_bot_conversation(role="assistant", content=reply, contact_id=contact_id)
 
         # 背景非同步萃取使用者自身相關資訊
         def _async_extract():
+            from app.utils import now_utc_iso
             w_status = get_worker_status(db_path=self.db_path)
             is_idle = not (w_status and w_status.get("running"))
             if is_idle:
@@ -112,11 +136,12 @@ class ChatHandler:
                     "mode": "自身偏好記憶萃取",
                     "detail": "正在非同步分析並萃取對話中的個人偏好事實...",
                     "start_time": time.time(),
-                    "last_update": datetime.now(timezone.utc).isoformat()
+                    "last_update": now_utc_iso()
                 }, db_path=self.db_path)
 
             try:
-                extracted = self.llm_client.extract_self_info(user_text)
+                extract_model = self.self_extract_model or self.model
+                extracted = self.llm_client.extract_self_info(user_text, model=extract_model)
                 if extracted:
                     # 去重：若向量庫已有高度相似記憶（distance < 0.15），跳過寫入
                     if not self.memory_manager.is_duplicate_self_memory(extracted):
@@ -128,7 +153,7 @@ class ChatHandler:
                     set_worker_status({
                         "running": False,
                         "target": "user_self",
-                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                        "completed_at": now_utc_iso(),
                         "detail": "自身記憶萃取完成"
                     }, db_path=self.db_path)
 

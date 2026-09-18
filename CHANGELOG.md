@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-09-19
+
+### Changed — Gemini 呼叫防卡死、消除雙軌架構與模型重試參數化
+
+- **全面消除雙軌連線架構**：重構 `app/services/llm_service.py` 中的 `LLMClient`，使其底層連線全面委派（Delegate）給專職的 `app/clients/gemini.py`（`GeminiClient`），徹底終結聊天與資料管線連線不一致的雙軌技術債。
+- **重試語意修正為「初次嘗試 + N 次重試」**：單一模型嘗試上限調整為 `total_attempts = 1 + retries`，當 `settings.GEMINI_MODEL_MAX_RETRIES=2` 時，確保依序執行「1 次初次呼叫 + 2 次重試」（共嘗試 3 次）後才切換至下一順位候選模型。
+- **關閉 Gemini 思考推理 (Thinking)**：呼叫文字生成 API 時預設加入 `thinking_config=ThinkingConfig(thinking_budget=0)`，徹底關閉模型內部思考推理時間，解決 Gemini 3.7 系列深層推理造成的假死與長延遲問題。
+- **加入連線超時防護 (Timeout)**：配置 `http_options=HttpOptions(timeout=...)`，預設 30 秒超時中斷，防止底層 Blocking Socket 因網路波動或伺服器排隊無限期掛死。
+- **模型輪換重試次數參數化**：`app/core/config.py` 新增 `GEMINI_MODEL_MAX_RETRIES`（預設 2 次）與 `GEMINI_REQUEST_TIMEOUT`（預設 30 秒）。
+
+### Added — 聊天自動同步（Auto-Sync）與 pytest 獨立外部 API 測試
+
+- **聊天觸發即時私訊同步（Auto-Sync）**：於 `ChatHandler` 增加 `sync_callback` 支援。當使用者傳送一般對話訊息時，若目前已設定作用中的聯絡人（Active Contact），自動調用同步流程至 Instagram 抓取該對象之最新私訊並寫入 SQLite 資料庫（`amount=0` 不設上限，由底層 Jitter 與防風控機制調節），確保 `get_full_context` 組裝 Prompt 時能即時納入最新對話。若同步遇異常則安全 Fallback，不阻斷聊天回覆流程。
+- **Poller 訊息同步整合**：`BotPoller` 實作 `_sync_contact_messages`，透過 `SourceAdapterFactory` 取得 Instagram Adapter 抓取新訊息並以 `save_messages` 寫入資料庫，並將其綁定至 `CommandRouter` 與 `ChatHandler`。
+- **命令列參數支援 (`-E` / `--external`)**：於 `tests/conftest.py` 註冊 `-E` 與 `--external` 旗標；常規執行 `uv run pytest` 時自動跳過（Skip）所有標記 `@pytest.mark.external` 的測試，避免消耗 Token 與依賴外部網路。
+- **真實外部 API 連線合約測試**：新增 `tests/contracts/test_external_api.py`，自動檢測環境變數是否配置 Gemini 金鑰或 Instagram 帳密，未提供時自動 Skip，有提供時獨立執行真實端點呼叫與連通性檢測。
+- **app/utils/ 模組化與 High-level / Low-level 分離**：建立專屬目錄，依 domain 精簡分檔（`time.py`、`math.py`、`text.py`、`db.py`）並於 `__init__.py` 統一 export。Pipelines、Handlers 與 Services 僅保留 high-level 調度，所有純運算、時間解析（相容 ISO 8601、Z 補償、YYYY-MM-DD）、文字清理、Cosine 向量計算與 DB Mapping 抽離至 utils 底層。
+- **模型調用參數化 (Dependency Injection)**：`ChatHandler`、`CommandService` 與 `CommandRouter` 全面支援 `model` 與 `self_extract_model` 傳參；`LLMClient.extract_self_info` 預設直接繼承 instance 首選主模型（`self.candidate_models[0]` 即 `gemini-3.8-flash`），不再 fallback 至 `flash-lite`。
+- **訊息 Incremental Sync (Early Stopping)**：`IGClient.get_thread_messages`、`InstagramAdapter.fetch_messages`、`IngestionPipeline.sync_messages` 與 `BotPoller._sync_contact_messages` 全面支援 `stop_item_ids` 錨點。Paging 往回爬取時，一旦偵測到 local 已存的 `item_id` 即刻 break 結束翻頁 (Early Stopping)。同時移除 `amount=0` 時強制抓取 5000 則之設定，常態 Incremental Sync 耗時由數十分鐘降至 1~2 秒。
+- **單元測試覆蓋**：於 `tests/unit/test_gemini_keyring.py`、`tests/bot/test_router.py`、`tests/bot/test_poller.py`、`tests/bot/test_self_rag.py`、`tests/sources/test_source_adapters.py`、`tests/storage/test_db.py` 與 `tests/unit/test_utils.py` 補齊 Early Stopping 中斷、local ID 查詢、Auto-Sync 觸發與例外 Fallback、Thinking Budget 與 Timeout 設定、模型傳參驗證、以及各項 utils 邊界測試。
+
 ## [0.5.0] - 2026-09-18
 
 ### Changed — 記憶組裝、摘要機制與 Prompt 全面升級

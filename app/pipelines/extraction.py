@@ -15,22 +15,10 @@ from typing import List, Dict, Any, Optional
 from app.core.config import settings
 from app.clients.gemini import GeminiClient
 from app.storage.db import save_contact_events
+from app.utils import parse_time_str
 
 logger = logging.getLogger("bestieAI.pipelines.extraction")
 PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "events" / "extract.txt"
-
-
-def parse_time_str(time_str: Optional[str]) -> Optional[datetime]:
-    if not time_str:
-        return None
-    try:
-        return datetime.fromisoformat(time_str)
-    except Exception:
-        pass
-    try:
-        return datetime.strptime(time_str[:10], "%Y-%m-%d")
-    except Exception:
-        return None
 
 
 class EventExtractor:

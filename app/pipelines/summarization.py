@@ -66,18 +66,8 @@ class Summarizer:
             candidate_models=["gemini-3.5-flash-lite", "gemini-3.8-flash"]
         ).strip()
 
-        if "無" in raw_output:
-            if raw_output == "無" or "無新增事實" in raw_output:
-                return []
-
-        memories = []
-        for line in raw_output.splitlines():
-            line = line.strip()
-            if line.startswith(("- ", "• ", "* ")):
-                line = line[2:].strip()
-            if line and line != "無":
-                memories.append(line)
-        return memories
+        from app.utils import parse_bullet_list
+        return parse_bullet_list(raw_output)
 
     def check_and_update_summary(
         self,

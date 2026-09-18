@@ -5,7 +5,7 @@ instagram.py — Instagram 私訊通訊外部適配器。
 import time
 import random
 import logging
-from typing import List, Optional, Callable
+from typing import List, Optional, Callable, Set, Union, Collection
 from instagrapi import Client
 from instagrapi.types import DirectThread, DirectMessage
 from app.core.rate_limit import ig_retry, paged_jitter
@@ -96,6 +96,7 @@ class IGClient:
         batch_rest_pages: int = 5,
         batch_rest_seconds: float = 25.0,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        stop_item_ids: Optional[Union[str, Collection[str]]] = None,
     ) -> List[DirectMessage]:
         params = {
             "visual_message_return_type": "unseen",
@@ -106,6 +107,14 @@ class IGClient:
         cursor = None
         items = []
         page = 0
+
+        # 將終止錨點集合標準化為字串集合
+        stop_set: Set[str] = set()
+        if stop_item_ids:
+            if isinstance(stop_item_ids, str):
+                stop_set.add(stop_item_ids)
+            else:
+                stop_set.update(str(x) for x in stop_item_ids if x)
 
         while True:
             if cursor:
@@ -132,8 +141,17 @@ class IGClient:
                 raise
 
             thread_data = result.get("thread", {})
+            stop_reached = False
             for item in thread_data.get("items", []):
+                item_id = str(item.get("item_id") or item.get("id") or "")
+                if stop_set and item_id and item_id in stop_set:
+                    logger.info(f"偵測到既有訊息 (item_id={item_id})，達成增量同步接軌，提前結束爬取。")
+                    stop_reached = True
+                    break
                 items.append(item)
+
+            if stop_reached:
+                break
 
             cursor = thread_data.get("oldest_cursor")
             page += 1

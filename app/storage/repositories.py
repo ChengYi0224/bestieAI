@@ -8,7 +8,7 @@ import sqlite3
 import functools
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Callable
+from typing import Optional, List, Dict, Any, Callable, Set
 
 from app.storage.db import get_connection
 
@@ -233,6 +233,16 @@ class MessageRepository(BaseRepository):
         cursor.execute("SELECT sent_at FROM messages WHERE contact_id = ? ORDER BY sent_at DESC LIMIT 1", (contact_id,))
         row = cursor.fetchone()
         return row["sent_at"] if row else None
+
+    @with_connection(readonly=True)
+    def get_latest_item_ids(self, conn: sqlite3.Connection, contact_id: int, limit: int = 50) -> Set[str]:
+        """取得指定聯絡人最新 N 則訊息的外部 ID 集合。"""
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT ig_item_id FROM messages WHERE contact_id = ? AND ig_item_id IS NOT NULL ORDER BY sent_at DESC LIMIT ?",
+            (contact_id, limit)
+        )
+        return {str(row["ig_item_id"]) for row in cursor.fetchall() if row["ig_item_id"]}
 
 
 class BotStateRepository(BaseRepository):

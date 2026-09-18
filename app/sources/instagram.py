@@ -47,16 +47,15 @@ class InstagramAdapter(BaseSourceAdapter):
 
     @staticmethod
     def _clean_text(raw_text: Optional[str]) -> str:
-        if not raw_text:
-            return "[圖片/貼圖/非文字訊息]"
-        cleaned = raw_text.strip()
-        return cleaned if cleaned else "[圖片/貼圖/非文字訊息]"
+        from app.utils import clean_message_text
+        return clean_message_text(raw_text, default="[圖片/貼圖/非文字訊息]")
 
     def fetch_messages(
         self,
         target: str,
         amount: int = 0,
         progress_callback: Optional[Any] = None,
+        stop_item_ids: Optional[Any] = None,
     ) -> List[NormalizedMessage]:
         thread = self.ig_client.get_thread_by_username(target)
         if not thread:
@@ -65,8 +64,9 @@ class InstagramAdapter(BaseSourceAdapter):
         thread_id = str(thread.id)
         raw_messages = self.ig_client.get_thread_messages(
             thread_id=thread_id,
-            amount=amount if amount > 0 else 5000,
+            amount=amount,
             progress_callback=progress_callback,
+            stop_item_ids=stop_item_ids,
         )
 
         me_pk = self.get_self_id()

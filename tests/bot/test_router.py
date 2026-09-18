@@ -221,3 +221,105 @@ def test_card_command(tmp_path):
     res_empty = router.handle_message("card no_summary_user")
     assert "目前尚未建立摘要卡" in res_empty
 
+
+def test_chat_auto_sync_triggers_callback(tmp_path):
+    """驗證聊天時若有作用中的對象，會調用 sync_callback 同步最新訊息。"""
+    from app.storage.db import set_active_contact
+
+    db_file = tmp_path / "auto_sync.db"
+    init_db(db_file)
+    get_or_create_contact("active_target", "Active Target", db_path=db_file)
+    set_active_contact("active_target", db_path=db_file)
+
+    mock_memory = MagicMock()
+    mock_memory.get_full_context.return_value = (
+        {"id": 1, "display_name": "Active Target", "ig_account_id": "active_target"},
+        "摘要",
+        "RAG",
+        "近期",
+        "歷史",
+        "自傳",
+    )
+    mock_llm = MagicMock()
+    mock_llm.generate_reply.return_value = "測試回覆"
+    mock_sync = MagicMock()
+
+    router = CommandRouter(
+        memory_manager=mock_memory,
+        llm_client=mock_llm,
+        db_path=db_file,
+        sync_callback=mock_sync,
+    )
+
+    reply = router.handle_message("你好呀")
+    assert reply == "測試回覆"
+    mock_sync.assert_called_once_with("active_target")
+
+
+def test_chat_auto_sync_fallback_on_exception(tmp_path):
+    """驗證 sync_callback 拋出例外時安全 Fallback，不阻斷聊天對話。"""
+    from app.storage.db import set_active_contact
+
+    db_file = tmp_path / "auto_sync_fallback.db"
+    init_db(db_file)
+    get_or_create_contact("active_target_err", "Target Err", db_path=db_file)
+    set_active_contact("active_target_err", db_path=db_file)
+
+    mock_memory = MagicMock()
+    mock_memory.get_full_context.return_value = (
+        {"id": 1, "display_name": "Target Err", "ig_account_id": "active_target_err"},
+        "摘要",
+        "RAG",
+        "近期",
+        "歷史",
+        "自傳",
+    )
+    mock_llm = MagicMock()
+    mock_llm.generate_reply.return_value = "正常回覆"
+    mock_sync = MagicMock(side_effect=RuntimeError("網路中斷"))
+
+    router = CommandRouter(
+        memory_manager=mock_memory,
+        llm_client=mock_llm,
+        db_path=db_file,
+        sync_callback=mock_sync,
+    )
+
+    reply = router.handle_message("在嗎")
+    assert reply == "正常回覆"
+    mock_sync.assert_called_once_with("active_target_err")
+
+
+def test_chat_handler_model_parameter_forwarding(tmp_path):
+    """驗證 CommandRouter 與 ChatHandler 正確透傳自訂模型參數至 LLMClient。"""
+    from app.storage.db import set_active_contact
+
+    db_file = tmp_path / "model_param.db"
+    init_db(db_file)
+    get_or_create_contact("test_forward", "Test Forward", db_path=db_file)
+    set_active_contact("test_forward", db_path=db_file)
+
+    mock_memory = MagicMock()
+    mock_memory.get_full_context.return_value = (
+        {"id": 1, "display_name": "Test", "ig_account_id": "test_forward"},
+        "摘要", "RAG", "近期", "歷史", "自傳"
+    )
+    mock_llm = MagicMock()
+    mock_llm.generate_reply.return_value = "模型回覆"
+
+    router = CommandRouter(
+        memory_manager=mock_memory,
+        llm_client=mock_llm,
+        db_path=db_file,
+        model="custom-chat-model",
+        self_extract_model="custom-extract-model",
+    )
+
+    reply = router.handle_message("你好")
+    assert reply == "模型回覆"
+
+    call_kwargs = mock_llm.generate_reply.call_args.kwargs
+    assert call_kwargs.get("model") == "custom-chat-model"
+
+
+

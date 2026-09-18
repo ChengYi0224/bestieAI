@@ -56,15 +56,9 @@ class NormalizedMessage:
             raise ValueError("NormalizedMessage.sent_at 不得為空。")
 
         # 檢驗時間字串可被基本解析
-        try:
-            clean_time = self.sent_at.replace("Z", "+00:00")
-            datetime.fromisoformat(clean_time)
-        except Exception as e:
-            # 容許 YYYY-MM-DD 或通用時間字串
-            try:
-                datetime.strptime(self.sent_at[:10], "%Y-%m-%d")
-            except Exception:
-                raise ValueError(f"NormalizedMessage.sent_at 非有效時間格式: {self.sent_at!r} ({e})")
+        from app.utils import parse_time_str
+        if not parse_time_str(self.sent_at):
+            raise ValueError(f"NormalizedMessage.sent_at 非有效時間格式: {self.sent_at!r}")
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -89,6 +83,7 @@ class BaseSourceAdapter(ABC):
         target: str,
         amount: int = 0,
         progress_callback: Optional[Any] = None,
+        stop_item_ids: Optional[Any] = None,
     ) -> List[NormalizedMessage]:
         """從指定來源抓取訊息並轉換為 NormalizedMessage 列表。"""
         pass
