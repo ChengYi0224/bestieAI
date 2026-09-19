@@ -71,8 +71,11 @@ class BotPoller:
             self.router = router
             if getattr(self.router, "sync_callback", None) is None:
                 self.router.sync_callback = self._sync_contact_messages
-                if hasattr(self.router, "service") and hasattr(self.router.service, "_chat"):
-                    self.router.service._chat.sync_callback = self._sync_contact_messages
+                if hasattr(self.router, "service"):
+                    if hasattr(self.router.service, "_chat"):
+                        self.router.service._chat.sync_callback = self._sync_contact_messages
+                    if hasattr(self.router.service, "_export"):
+                        self.router.service._export.sync_callback = self._sync_contact_messages
         else:
             self.router = CommandRouter(sync_callback=self._sync_contact_messages)
 

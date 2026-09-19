@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-09-19
+
+### Added — 對話紀錄匯出指令 (`exp <num> [-I]`) 與即時同步
+
+- **新增 `exp <num>` 對話匯出指令**：新增 `ExportCommand`、`_ExportParser`（別名 `exp`、`export`）與 `ExportHandler`。可指定或自動使用目前選定對象（Active Contact），依時序輸出最新 `<num>` 則對話紀錄（未帶數字時預設 20 則）。
+- **預設 Auto-Sync 與 `-I` Immediate 模式**：執行 `exp <num>` 預設先調用 `sync_callback` 增量同步最新私訊，確保輸出包含即時對話；若加上 `-I`（或 `-i`、`--immediate`）旗標則直接從本地 SQLite 資料庫讀取並輸出（不呼叫同步），大幅提升回應速度與離線讀取體驗。
+- **優化 `help all` 指令說明分類**：將全量指令清晰劃分為「需搭配 select（針對當前選定對象操作）」與「獨立指令（全域管理，不需搭配 select）」，大幅提升終端與私訊查詢時的操作指引清晰度。
+- **單元測試覆蓋**：於 `tests/unit/test_command_bus.py` 新增指令解析（支援各類參數順序與旗標）、`ExportHandler` 同步觸發/跳過處理邏輯測試與 `help all` 分類測試。
+
 ## [0.7.0] - 2026-09-19
 
 ### Changed — 文字清理與正則操作全面抽離至 Helper Functions、純化業務主流程

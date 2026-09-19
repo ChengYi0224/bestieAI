@@ -15,25 +15,27 @@ from app.commands.handlers.contact import ContactHandler
 from app.commands.handlers.memory import MemoryHandler
 from app.commands.handlers.chat import ChatHandler
 from app.commands.handlers.follower import FollowerHandler
+from app.commands.handlers.export import ExportHandler
 from app.commands.commands import (
     HelpCommand, TrackCommand, TrackFullCommand, SelectCommand,
     SelectChoiceCommand, NicknameCommand, MeCommand, StatusCommand,
     ListContactsCommand, CardCommand, RefreshSummaryCommand,
     SummarizeHistoryCommand, SyncCommand, UntrackCommand,
     RebuildVectorsCommand, ChatCommand, FollowerSnapshotCommand,
-    CheckUnfollowersCommand,
+    CheckUnfollowersCommand, ExportCommand,
 )
 
 # 重新匯出 Command 類別（讓現有 import 不需改動）
 __all__ = [
     "CommandService",
     "create_default_command_bus",
+    "ExportHandler",
     "HelpCommand", "TrackCommand", "TrackFullCommand", "SelectCommand",
     "SelectChoiceCommand", "NicknameCommand", "MeCommand", "StatusCommand",
     "ListContactsCommand", "CardCommand", "RefreshSummaryCommand",
     "SummarizeHistoryCommand", "SyncCommand", "UntrackCommand",
     "RebuildVectorsCommand", "ChatCommand", "FollowerSnapshotCommand",
-    "CheckUnfollowersCommand",
+    "CheckUnfollowersCommand", "ExportCommand",
 ]
 
 
@@ -68,6 +70,7 @@ class CommandService:
             self_extract_model=self_extract_model,
         )
         self._follower = FollowerHandler()
+        self._export = ExportHandler(db_path=db_path, sync_callback=sync_callback)
 
         # 向後相容屬性
         self.memory_manager = mm
@@ -126,6 +129,10 @@ class CommandService:
     def handle_chat(self, cmd: ChatCommand):
         return self._chat.handle_chat(cmd)
 
+    # ── Export ────────────────────────────────────────────────────────────────
+    def handle_export(self, cmd: ExportCommand):
+        return self._export.handle_export(cmd)
+
     # ── Follower ──────────────────────────────────────────────────────────────
     def handle_follower_snapshot(self, cmd: FollowerSnapshotCommand):
         return self._follower.handle_follower_snapshot(cmd)
@@ -154,6 +161,7 @@ def create_default_command_bus(service: "CommandService"):
     bus.register(UntrackCommand, service.handle_untrack)
     bus.register(RebuildVectorsCommand, service.handle_rebuild_vectors)
     bus.register(ChatCommand, service.handle_chat)
+    bus.register(ExportCommand, service.handle_export)
     bus.register(FollowerSnapshotCommand, service.handle_follower_snapshot)
     bus.register(CheckUnfollowersCommand, service.handle_check_unfollowers)
     return bus

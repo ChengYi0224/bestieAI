@@ -76,6 +76,12 @@ class SyncCommand(BaseCommand):
 class RebuildVectorsCommand(BaseCommand):
     target: str
 
+@dataclass
+class ExportCommand(BaseCommand):
+    limit: int = 20
+    immediate: bool = False
+    target: Optional[str] = None
+
 # ─── AI 對話 ─────────────────────────────────────────────
 @dataclass
 class ChatCommand(BaseCommand):

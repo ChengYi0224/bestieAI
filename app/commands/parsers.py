@@ -27,7 +27,7 @@ from app.commands.commands import (
     SelectChoiceCommand, NicknameCommand, MeCommand, StatusCommand,
     ListContactsCommand, CardCommand, RefreshSummaryCommand,
     SummarizeHistoryCommand, SyncCommand, UntrackCommand,
-    RebuildVectorsCommand, ChatCommand,
+    RebuildVectorsCommand, ChatCommand, ExportCommand,
 )
 from app.core.config import settings
 
@@ -227,6 +227,32 @@ class _RebuildVectorsParser(CommandParser):
         return RebuildVectorsCommand(target=target or "")
 
 
+class _ExportParser(CommandParser):
+    @property
+    def aliases(self): return ("exp", "export")
+
+    def parse(self, parts, db_path=None):
+        limit = 20
+        immediate = False
+        target = None
+
+        for p in parts[1:]:
+            lower = p.lower()
+            if lower in ("-i", "--immediate"):
+                immediate = True
+            elif p.isdigit():
+                limit = int(p)
+            else:
+                target = p
+
+        if not target:
+            from app.storage.db import get_active_contact
+            active = get_active_contact(db_path=db_path)
+            target = active["ig_account_id"] if active else ""
+
+        return ExportCommand(limit=limit, immediate=immediate, target=target)
+
+
 # ─── 工具函式 ─────────────────────────────────────────────────────────────────
 
 def _resolve_active(parts: List[str], index: int = 1, db_path: Optional[Any] = None) -> Optional[str]:
@@ -244,6 +270,6 @@ for _parser in [
     _HelpParser(), _TrackParser(), _TrackFullParser(), _SelectParser(),
     _NicknameParser(), _MeParser(), _StatusParser(), _ListParser(),
     _CardParser(), _RefreshSummaryParser(), _SummarizeHistoryParser(),
-    _SyncParser(), _UntrackParser(), _RebuildVectorsParser(),
+    _SyncParser(), _UntrackParser(), _RebuildVectorsParser(), _ExportParser(),
 ]:
     CommandParserRegistry.register(_parser)
