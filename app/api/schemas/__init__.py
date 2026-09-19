@@ -13,6 +13,13 @@ from app.api.schemas.message import (
     MessageListResponse,
     MessageResponse,
 )
+from app.api.schemas.action import (
+    ChatRequest,
+    ChatResponse,
+    ExtractContactResponse,
+    TrackContactRequest,
+    TrackContactResponse,
+)
 
 __all__ = [
     "TokenRequest",
@@ -30,4 +37,9 @@ __all__ = [
     "MessageListResponse",
     "EventResponse",
     "EventListResponse",
+    "TrackContactRequest",
+    "TrackContactResponse",
+    "ExtractContactResponse",
+    "ChatRequest",
+    "ChatResponse",
 ]

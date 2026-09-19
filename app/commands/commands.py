@@ -97,3 +97,15 @@ class FollowerSnapshotCommand(BaseCommand):
 @dataclass
 class CheckUnfollowersCommand(BaseCommand):
     pass
+
+# ─── 身分驗證與帳號綁定 ─────────────────────────────────────
+@dataclass
+class LoginCommand(BaseCommand):
+    ig_username: str
+    ig_password: str
+    sender_pk: Optional[str] = None
+
+@dataclass
+class TwoFactorCommand(BaseCommand):
+    code: str
+    sender_pk: Optional[str] = None

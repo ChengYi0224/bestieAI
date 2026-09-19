@@ -6,6 +6,11 @@ from app.api.dependencies import (
     get_current_user,
     get_message_service,
 )
+from app.api.schemas.action import (
+    ExtractContactResponse,
+    TrackContactRequest,
+    TrackContactResponse,
+)
 from app.api.schemas.common import ErrorResponse
 from app.api.schemas.contact import ContactResponse, ContactUpdateRequest
 from app.api.schemas.message import EventResponse
@@ -103,3 +108,46 @@ async def get_contact_events(
             detail=f"Contact {contact_id} not found",
         )
     return [EventResponse.model_validate(dict(e)) for e in events]
+
+
+@router.post(
+    "/track",
+    response_model=TrackContactResponse,
+    summary="追蹤新聯絡人並匯入對話",
+)
+async def track_contact(
+    payload: TrackContactRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    contact_service: ContactApiService = Depends(get_contact_service),
+) -> TrackContactResponse:
+    """建立或追蹤指定 Instagram 帳號並觸發歷史訊息匯入。"""
+    res = contact_service.track_contact(
+        user_id=current_user["id"],
+        ig_account_id=payload.ig_account_id,
+        limit=payload.limit or 1000,
+    )
+    return TrackContactResponse.model_validate(res)
+
+
+@router.post(
+    "/{contact_id}/extract",
+    response_model=ExtractContactResponse,
+    responses={404: {"model": ErrorResponse, "description": "聯絡人不存在"}},
+    summary="手動觸發聯絡人事件萃取與摘要更新",
+)
+async def extract_contact(
+    contact_id: int,
+    current_user: Dict[str, Any] = Depends(get_current_user),
+    contact_service: ContactApiService = Depends(get_contact_service),
+) -> ExtractContactResponse:
+    """手動觸發對指定聯絡人的記憶事件萃取與關係摘要卡刷新。"""
+    res = contact_service.extract_contact_events(
+        user_id=current_user["id"],
+        contact_id=contact_id,
+    )
+    if not res:
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail=f"Contact {contact_id} not found",
+        )
+    return ExtractContactResponse.model_validate(res)

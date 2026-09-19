@@ -16,6 +16,7 @@ from app.commands.handlers.memory import MemoryHandler
 from app.commands.handlers.chat import ChatHandler
 from app.commands.handlers.follower import FollowerHandler
 from app.commands.handlers.export import ExportHandler
+from app.commands.handlers.auth import AuthHandler
 from app.commands.commands import (
     HelpCommand, TrackCommand, TrackFullCommand, SelectCommand,
     SelectChoiceCommand, NicknameCommand, MeCommand, StatusCommand,
@@ -23,6 +24,7 @@ from app.commands.commands import (
     SummarizeHistoryCommand, SyncCommand, UntrackCommand,
     RebuildVectorsCommand, ChatCommand, FollowerSnapshotCommand,
     CheckUnfollowersCommand, ExportCommand,
+    LoginCommand, TwoFactorCommand,
 )
 
 # 重新匯出 Command 類別（讓現有 import 不需改動）
@@ -30,16 +32,23 @@ __all__ = [
     "CommandService",
     "create_default_command_bus",
     "ExportHandler",
+    "AuthHandler",
     "HelpCommand", "TrackCommand", "TrackFullCommand", "SelectCommand",
     "SelectChoiceCommand", "NicknameCommand", "MeCommand", "StatusCommand",
     "ListContactsCommand", "CardCommand", "RefreshSummaryCommand",
     "SummarizeHistoryCommand", "SyncCommand", "UntrackCommand",
     "RebuildVectorsCommand", "ChatCommand", "FollowerSnapshotCommand",
     "CheckUnfollowersCommand", "ExportCommand",
+    "LoginCommand", "TwoFactorCommand",
 ]
 
 
-from app.storage.repositories import ContactRepository, MessageRepository, BotStateRepository
+from app.storage.repositories import (
+    BotStateRepository,
+    ContactRepository,
+    MessageRepository,
+    UserRepository,
+)
 
 
 class CommandService:
@@ -59,6 +68,7 @@ class CommandService:
         contact_repo: Optional[ContactRepository] = None,
         message_repo: Optional[MessageRepository] = None,
         bot_state_repo: Optional[BotStateRepository] = None,
+        user_repo: Optional[UserRepository] = None,
     ):
         # 根組合點：在此建立或接收 Repositories，以 DI 注入子 Handler
         mm = memory_manager or MemoryManager()
@@ -66,6 +76,7 @@ class CommandService:
         cr = contact_repo or ContactRepository(db_path)
         mr = message_repo or MessageRepository(db_path)
         bsr = bot_state_repo or BotStateRepository(db_path)
+        ur = user_repo or UserRepository(db_path)
 
         self._help = HelpHandler()
         self._contact = ContactHandler(contact_repo=cr, bot_state_repo=bsr)
@@ -85,6 +96,7 @@ class CommandService:
             message_repo=mr,
             sync_callback=sync_callback,
         )
+        self._auth = AuthHandler(user_repo=ur)
 
         # 向後相容屬性
         self.memory_manager = mm
@@ -151,6 +163,13 @@ class CommandService:
     def handle_export(self, cmd: ExportCommand):
         return self._export.handle_export(cmd)
 
+    # ── Auth ──────────────────────────────────────────────────────────────────
+    def handle_login(self, cmd: LoginCommand):
+        return self._auth.handle_login(cmd)
+
+    def handle_two_factor(self, cmd: TwoFactorCommand):
+        return self._auth.handle_two_factor(cmd)
+
     # ── Follower ──────────────────────────────────────────────────────────────
     def handle_follower_snapshot(self, cmd: FollowerSnapshotCommand):
         return self._follower.handle_follower_snapshot(cmd)
@@ -180,6 +199,8 @@ def create_default_command_bus(service: "CommandService"):
     bus.register(RebuildVectorsCommand, service.handle_rebuild_vectors)
     bus.register(ChatCommand, service.handle_chat)
     bus.register(ExportCommand, service.handle_export)
+    bus.register(LoginCommand, service.handle_login)
+    bus.register(TwoFactorCommand, service.handle_two_factor)
     bus.register(FollowerSnapshotCommand, service.handle_follower_snapshot)
     bus.register(CheckUnfollowersCommand, service.handle_check_unfollowers)
     return bus

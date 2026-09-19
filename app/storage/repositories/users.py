@@ -41,6 +41,36 @@ class UserRepository(BaseRepository):
         cursor.execute("SELECT * FROM users WHERE google_sub = ?", (google_sub.strip(),))
         return cursor.fetchone()
 
+    @with_connection(readonly=True)
+    def get_by_ig_pk(self, conn: sqlite3.Connection, ig_pk: str) -> Optional[sqlite3.Row]:
+        """依 Instagram 數字流水號 (PK) 查詢使用者。"""
+        if not ig_pk or not str(ig_pk).strip():
+            return None
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE ig_pk = ?", (str(ig_pk).strip(),))
+        return cursor.fetchone()
+
+    @with_connection(readonly=False)
+    def bind_ig_account(
+        self,
+        conn: sqlite3.Connection,
+        user_id: int,
+        ig_pk: str,
+        ig_username: str,
+        encrypted_session: Optional[str] = None,
+    ) -> bool:
+        """綁定 Instagram 帳號與 Session 至指定使用者。"""
+        updates = ["ig_pk = ?", "ig_username = ?"]
+        params = [str(ig_pk).strip(), ig_username.strip()]
+        if encrypted_session:
+            updates.append("ig_session = ?")
+            params.append(encrypted_session)
+        params.append(user_id)
+        query = f"UPDATE users SET {', '.join(updates)} WHERE id = ?"
+        cursor = conn.cursor()
+        cursor.execute(query, tuple(params))
+        return cursor.rowcount > 0
+
     @with_connection(readonly=False)
     def create_user(
         self,

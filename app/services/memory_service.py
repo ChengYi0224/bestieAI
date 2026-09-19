@@ -51,10 +51,12 @@ class MemoryManager:
         self,
         vector_store: Optional[VectorStore] = None,
         self_vector_store: Optional[VectorStore] = None,
-        db_path: Optional[Any] = None
+        db_path: Optional[Any] = None,
+        user_id: Optional[int] = None,
     ):
-        self.vector_store = vector_store or VectorStore()
-        self.self_vector_store = self_vector_store or VectorStore(collection_name="user_self")
+        self.user_id = user_id
+        self.vector_store = vector_store or VectorStore(user_id=user_id)
+        self.self_vector_store = self_vector_store or VectorStore(collection_name="user_self", user_id=user_id)
         self.db_path = db_path
         self.last_query_embedding: Optional[List[float]] = None
 
@@ -126,13 +128,20 @@ class MemoryManager:
 
     def get_full_context(
         self,
-        user_query: str
+        user_query: str,
+        contact_id: Optional[int] = None,
     ) -> Tuple[Optional[Dict[str, Any]], str, str, str, str, str]:
         """
         組裝完整對話脈絡。
         回傳: (contact_dict, summary_card, rag_chunks_str, recent_context_str, chat_history_str, self_context_str)
         """
-        contact = get_active_contact(db_path=self.db_path)
+        if contact_id is not None:
+            from app.storage.repositories.contacts import ContactRepository
+            contact_repo = ContactRepository(db_path=self.db_path)
+            contact = contact_repo.get_by_id(contact_id)
+        else:
+            contact = get_active_contact(db_path=self.db_path)
+
         if not contact:
             return None, "", "", "", "", ""
 

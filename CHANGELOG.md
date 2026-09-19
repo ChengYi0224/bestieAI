@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-09-20
+
+### Added — Bot 多用戶 IG 登入/2FA 指令與 REST API 主動操作端點
+
+- **Bot 多用戶 IG 登入與 2FA 指令 (`login`, `2fa`)**：
+  - 新增 `LoginCommand` 與 `TwoFactorCommand` 命令模型與解析器。
+  - 新增 `AuthHandler`，使用 `instagrapi.Client` 處理帳密登入挑戰，支援 2FA 狀態暫存與接續驗證。
+  - 登入成功後加密保存 IG Session 至資料庫，並將使用者 IG PK (`ig_pk`) 永久綁定。
+  - 調整 `@require_whitelist` 攔截器，開放未綁定發訊者使用 `login`、`2fa`、`help` 指令以利登入。
+- **REST API 主動操作端點**：
+  - `POST /contacts/track`：接收目標 IG 帳號與上限，建立聯絡人並觸發或排程匯入歷史對話。
+  - `POST /contacts/{id}/extract`：手動觸發指定聯絡人之事件萃取與人物摘要卡刷新。
+  - `POST /chat`：REST API 專屬 AI 陪聊端點，整合 RAG 記憶檢索與歷史對話記錄。
+- **API 專用 Service 與 Schemas**：
+  - 新增 `ChatApiService` 封裝 API 聊天業務邏輯。
+  - `ContactApiService` 新增 `track_contact` 與 `extract_contact_events`。
+  - 新增 `app/api/schemas/action.py` 定義標準 Request / Response。
+- **單元測試覆蓋**：
+  - 新增 `tests/unit/test_bot_auth_commands.py` 測試 2FA 流程、密碼錯誤與白名單放行。
+  - 新增 `tests/unit/test_api_actions.py` 測試 `track`, `extract`, `chat` 端點與錯誤處理。
+  - 全量單元測試 137 筆全數通過。
+
 ## [0.12.0] - 2026-09-20
 
 ### Added — 雙軌身分認證（Google OAuth + 原生帳密）與多用戶 ChromaDB 向量隔離

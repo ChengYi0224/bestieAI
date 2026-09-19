@@ -90,16 +90,19 @@ class CommandRouter:
 
         return CommandParserRegistry.parse(text, db_path=self.db_path)
 
-    def handle_message_structured(self, raw_text: str) -> CommandResult:
+    def handle_message_structured(self, raw_text: str, sender_pk: Optional[str] = None) -> CommandResult:
         """主入口：回傳具備結構化資料與文字的 CommandResult。"""
         text = raw_text.strip()
         if not text:
             return CommandResult(success=False, message="收到空白訊息。")
 
         cmd = self.parse_text_to_command(raw_text)
+        if sender_pk and hasattr(cmd, "sender_pk"):
+            cmd.sender_pk = sender_pk
+
         return self.bus.dispatch(cmd)
 
-    def handle_message(self, raw_text: str) -> str:
+    def handle_message(self, raw_text: str, sender_pk: Optional[str] = None) -> str:
         """向後相容主入口：接收文字指令並返回供 IG 私訊傳送的字串。"""
-        res = self.handle_message_structured(raw_text)
+        res = self.handle_message_structured(raw_text, sender_pk=sender_pk)
         return res.message

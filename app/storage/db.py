@@ -29,6 +29,9 @@ def init_db(db_path: Optional[Path] = None) -> None:
             email TEXT UNIQUE,
             password_hash TEXT,
             google_sub TEXT UNIQUE,
+            ig_pk TEXT UNIQUE,
+            ig_username TEXT,
+            ig_session TEXT,
             display_name TEXT,
             avatar_url TEXT,
             status TEXT DEFAULT 'active',
@@ -44,6 +47,9 @@ def init_db(db_path: Optional[Path] = None) -> None:
             ("contacts", "full_history_summary TEXT"),
             ("contacts", "full_history_updated_at DATETIME"),
             ("contacts", "user_id INTEGER DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE"),
+            ("users", "ig_pk TEXT"),
+            ("users", "ig_username TEXT"),
+            ("users", "ig_session TEXT"),
         ]
         for table, col_def in migrations:
             try:

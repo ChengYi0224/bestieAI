@@ -298,9 +298,9 @@ class BotPoller:
         if item_id:
             self.seen_message_ids.add(item_id)
 
-        logger.info(f"[Realtime Push] 收到授權主帳號 ({user_id}) 訊息: {text}")
+        logger.info(f"[Realtime Push] 收到授權發訊者 ({user_id}) 訊息: {text}")
         try:
-            result = self.router.handle_message_structured(text)
+            result = self.router.handle_message_structured(text, sender_pk=user_id)
         except Exception as e:
             logger.error(f"處理訊息時發生未預期錯誤: {e}")
             log_error(e, context="BotPoller._process_message", logger_name="bestieAI.bot_poller")

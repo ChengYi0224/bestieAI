@@ -6,6 +6,7 @@ from app.services.auth_api_service import AuthApiService
 from app.services.contact_api_service import ContactApiService
 from app.services.message_api_service import MessageApiService
 from app.services.status_api_service import StatusApiService
+from app.services.chat_api_service import ChatApiService
 from app.storage.repositories.bot_state import BotStateRepository
 from app.storage.repositories.contacts import ContactRepository
 from app.storage.repositories.events import EventRepository
@@ -69,6 +70,13 @@ def get_message_service(
         event_repo=event_repo,
         contact_repo=contact_repo,
     )
+
+
+def get_chat_service(
+    contact_repo: ContactRepository = Depends(get_contact_repo),
+    bot_state_repo: BotStateRepository = Depends(get_bot_state_repo),
+) -> ChatApiService:
+    return ChatApiService(contact_repo=contact_repo, bot_state_repo=bot_state_repo)
 
 
 # ==================== 認證相依性 ====================

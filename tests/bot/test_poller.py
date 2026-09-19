@@ -56,8 +56,8 @@ def test_poller_realtime_message_processing():
 
     poller._on_realtime_message(event_payload)
 
-    # 驗證 router 接收到正確指令
-    mock_router.handle_message_structured.assert_called_with("help")
+    # 驗證 router 接收到正確指令與發訊者 PK
+    mock_router.handle_message_structured.assert_called_with("help", sender_pk="22222")
     # 驗證發送回覆至正確的 thread
     mock_ig.send_message.assert_called_with("thread_abc_123", "測試回覆")
 

@@ -28,6 +28,7 @@ from app.commands.commands import (
     ListContactsCommand, CardCommand, RefreshSummaryCommand,
     SummarizeHistoryCommand, SyncCommand, UntrackCommand,
     RebuildVectorsCommand, ChatCommand, ExportCommand,
+    LoginCommand, TwoFactorCommand,
 )
 from app.core.config import settings
 
@@ -265,6 +266,25 @@ class _ExportParser(CommandParser):
         return ExportCommand(limit=limit, immediate=immediate, target=target)
 
 
+class _LoginParser(CommandParser):
+    @property
+    def aliases(self): return ("login", "登入")
+
+    def parse(self, parts, db_path=None):
+        if len(parts) >= 3:
+            return LoginCommand(ig_username=parts[1].strip(), ig_password=parts[2].strip())
+        return LoginCommand(ig_username="", ig_password="")
+
+
+class _TwoFactorParser(CommandParser):
+    @property
+    def aliases(self): return ("2fa", "twofactor", "otp")
+
+    def parse(self, parts, db_path=None):
+        code = parts[1].strip() if len(parts) > 1 else ""
+        return TwoFactorCommand(code=code)
+
+
 # ─── 工具函式 ─────────────────────────────────────────────────────────────────
 
 def _resolve_active(parts: List[str], index: int = 1, db_path: Optional[Any] = None) -> Optional[str]:
@@ -283,5 +303,6 @@ for _parser in [
     _NicknameParser(), _MeParser(), _StatusParser(), _ListParser(),
     _CardParser(), _RefreshSummaryParser(), _SummarizeHistoryParser(),
     _SyncParser(), _UntrackParser(), _RebuildVectorsParser(), _ExportParser(),
+    _LoginParser(), _TwoFactorParser(),
 ]:
     CommandParserRegistry.register(_parser)

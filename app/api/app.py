@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.routers import (
     auth_router,
+    chat_router,
     contacts_router,
     messages_router,
     status_router,
@@ -14,7 +15,7 @@ def create_app() -> FastAPI:
     """建構並配置 FastAPI 應用程式實例。"""
     application = FastAPI(
         title="bestieAI REST API",
-        version="0.12.0",
+        version="0.13.0",
         description="Sonara 產品專用 bestieAI 後端 REST API 介面。",
     )
 
@@ -37,5 +38,6 @@ def create_app() -> FastAPI:
     application.include_router(status_router)
     application.include_router(contacts_router)
     application.include_router(messages_router)
+    application.include_router(chat_router)
 
     return application
