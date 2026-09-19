@@ -8,10 +8,9 @@ gemini.py — Google Gemini 外部客戶端封裝。
 import time
 import logging
 import threading
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict
 from google import genai
 from google.genai import types
-from google.genai.errors import APIError
 
 from app.core.config import settings
 
@@ -113,7 +112,6 @@ class GeminiClient:
         dedup_models = [m for m in models if not (m in seen or seen.add(m))]
 
         total_attempts = 1 + retries
-        start_t = time.time()
         for model in dedup_models:
             for attempt in range(total_attempts):
                 key = self.key_ring.get_available_key()

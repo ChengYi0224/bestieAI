@@ -25,11 +25,11 @@ PIPELINE (L2):
 import csv
 import json
 import logging
-import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 from app.sources.base import BaseSourceAdapter, NormalizedMessage
+from app.utils.text import parse_line_chat_date_header, parse_line_chat_message
 
 logger = logging.getLogger("bestieAI.sources.file_import")
 
@@ -135,25 +135,20 @@ class FileImportAdapter(BaseSourceAdapter):
         result: List[NormalizedMessage] = []
         current_date_str = None
 
-        date_header_re = re.compile(r"^(\d{4}[/\.-]\d{1,2}[/\.-]\d{1,2})")
-        msg_line_re = re.compile(r"^(\d{1,2}:\d{2})\s+([^\s]+)\s+(.+)$")
-
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for idx, line in enumerate(f):
                 line = line.strip()
                 if not line:
                     continue
 
-                date_m = date_header_re.match(line)
-                if date_m and ("星期" in line or len(line) <= 15):
-                    raw_d = date_m.group(1).replace("/", "-").replace(".", "-")
-                    parts = raw_d.split("-")
-                    current_date_str = f"{int(parts[0]):04d}-{int(parts[1]):02d}-{int(parts[2]):02d}"
+                date_header = parse_line_chat_date_header(line)
+                if date_header:
+                    current_date_str = date_header
                     continue
 
-                msg_m = msg_line_re.match(line)
-                if msg_m:
-                    time_str, sender_raw, content = msg_m.group(1), msg_m.group(2), msg_m.group(3)
+                msg_parsed = parse_line_chat_message(line)
+                if msg_parsed:
+                    time_str, sender_raw, content = msg_parsed
                     sender = "me" if sender_raw in (self.self_id, "me") else "them"
                     d_prefix = current_date_str or datetime.now(timezone.utc).strftime("%Y-%m-%d")
                     sent_at = f"{d_prefix}T{time_str}:00"

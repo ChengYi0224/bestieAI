@@ -27,8 +27,7 @@ from app.commands.commands import (
     SelectChoiceCommand, NicknameCommand, MeCommand, StatusCommand,
     ListContactsCommand, CardCommand, RefreshSummaryCommand,
     SummarizeHistoryCommand, SyncCommand, UntrackCommand,
-    RebuildVectorsCommand, ChatCommand, FollowerSnapshotCommand,
-    CheckUnfollowersCommand,
+    RebuildVectorsCommand, ChatCommand,
 )
 from app.core.config import settings
 

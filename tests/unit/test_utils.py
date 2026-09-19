@@ -7,7 +7,18 @@ import pytest
 
 from app.utils.time import parse_time_str, format_time, now_utc_iso
 from app.utils.math import cosine_similarity, cosine_distance
-from app.utils.text import clean_message_text, truncate_text, parse_bullet_list
+from app.utils.text import (
+    clean_message_text,
+    truncate_text,
+    strip_bullet_prefix,
+    parse_bullet_list,
+    normalize_to_bullet_lines,
+    extract_tagged_blocks,
+    parse_cluster_results,
+    extract_leading_date,
+    parse_line_chat_date_header,
+    parse_line_chat_message,
+)
 from app.utils.db import row_to_dict, get_row_field
 
 
@@ -86,20 +97,96 @@ def test_truncate_text():
     assert truncate_text("", max_length=5) == ""
 
 
+def test_strip_bullet_prefix():
+    assert strip_bullet_prefix("- 項目A") == "項目A"
+    assert strip_bullet_prefix("* 項目B") == "項目B"
+    assert strip_bullet_prefix("• 項目C") == "項目C"
+    assert strip_bullet_prefix("1. 項目D") == "項目D"
+    assert strip_bullet_prefix("02. 項目E") == "項目E"
+    assert strip_bullet_prefix("3) 項目F") == "項目F"
+    assert strip_bullet_prefix("純文字內容") == "純文字內容"
+
+
 def test_parse_bullet_list():
     raw = """
     - 第一條事項
     * 第二條重點
     • 第三條備註
+    1. 第四條編號
+    02. 第五條編號
     - 無
     """
     items = parse_bullet_list(raw)
-    assert items == ["第一條事項", "第二條重點", "第三條備註"]
+    assert items == ["第一條事項", "第二條重點", "第三條備註", "第四條編號", "第五條編號"]
 
     assert parse_bullet_list("無") == []
     assert parse_bullet_list("無新增事實") == []
+    assert parse_bullet_list("無重要事件") == []
     assert parse_bullet_list("") == []
     assert parse_bullet_list(None) == []
+
+
+def test_normalize_to_bullet_lines():
+    raw = """
+    1. 喜歡吃辣
+    2. 養了一隻貓叫米米
+    無新增事實
+    """
+    normalized = normalize_to_bullet_lines(raw)
+    assert normalized == "- 喜歡吃辣\n- 養了一隻貓叫米米"
+
+    assert normalize_to_bullet_lines("無") == ""
+    assert normalize_to_bullet_lines("") == ""
+
+
+def test_extract_tagged_blocks_and_cluster_results():
+    payload = """
+    <cluster_result id="group_1">
+    - 2026-09-19 討論專案架構
+    - 2026-09-19 確認交付時程
+    </cluster_result>
+
+    <cluster_result id="group_2">
+    1. 2026-09-20 購買食材
+    </cluster_result>
+    """
+    blocks = extract_tagged_blocks(payload, "cluster_result")
+    assert len(blocks) == 2
+    assert blocks[0][0] == "group_1"
+
+    results = parse_cluster_results(payload)
+    assert "group_1" in results
+    assert len(results["group_1"]) == 2
+    assert results["group_1"][0] == "2026-09-19 討論專案架構"
+    assert results["group_2"] == ["2026-09-20 購買食材"]
+
+    assert parse_cluster_results("") == {}
+
+
+def test_extract_leading_date():
+    assert extract_leading_date("[2026-09-19 14:00] 對話內容") == "2026-09-19"
+    assert extract_leading_date("[2026/9/5] 訊息") == "2026-09-05"
+    assert extract_leading_date("2026.03.01 標題") == "2026-03-01"
+    assert extract_leading_date("沒有日期的文字") is None
+    assert extract_leading_date("") is None
+
+
+def test_parse_line_chat_helpers():
+    # 測試日期標頭行
+    assert parse_line_chat_date_header("2026/09/19 星期六") == "2026-09-19"
+    assert parse_line_chat_date_header("2026-9-5 週一") == "2026-09-05"
+    assert parse_line_chat_date_header("2026.01.02") == "2026-01-02"
+    assert parse_line_chat_date_header("今天吃飽沒？") is None
+
+    # 測試訊息行
+    msg = parse_line_chat_message("14:30 小美 週末要不要去露營？")
+    assert msg is not None
+    time_str, sender, content = msg
+    assert time_str == "14:30"
+    assert sender == "小美"
+    assert content == "週末要不要去露營？"
+
+    assert parse_line_chat_message("這不是訊息格式") is None
 
 
 # ==================== DB Utils ====================

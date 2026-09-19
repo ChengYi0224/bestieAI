@@ -7,11 +7,10 @@ clustering.py — 時序感知全連結向量分群管線（Temporal Complete Li
 4. 支援單群容量上限（max_cluster_size，預設 4 條）。
 5. 純演算法與矩陣運算，100% 離線本地執行，不包含外部 API 網路請求。
 """
-from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from app.core.config import settings
-from app.utils import parse_time_str, cosine_similarity
+from app.utils import parse_time_str, cosine_similarity, extract_leading_date
 
 
 class EventClusterer:
@@ -53,9 +52,9 @@ class EventClusterer:
         for c in chunks:
             t = parse_time_str(c.get("start_time"))
             if not t:
-                text = c.get("text", "")
-                if text.startswith("[") and len(text) >= 11 and text[1:11].count("-") == 2:
-                    t = parse_time_str(text[1:11])
+                leading_date = extract_leading_date(c.get("text", ""))
+                if leading_date:
+                    t = parse_time_str(leading_date)
             parsed_times.append(t)
 
         clusters: List[List[int]] = []

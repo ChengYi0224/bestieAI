@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Optional
 from instagrapi import Client
-from instagrapi.exceptions import LoginRequired, TwoFactorRequired, ChallengeRequired
+from instagrapi.exceptions import TwoFactorRequired, ChallengeRequired
 
 from app.core.config import settings
 from app.core.security import SessionCipher

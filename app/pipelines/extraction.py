@@ -9,13 +9,13 @@ extraction.py — 事件提煉與時間滑動窗口管線（Temporal Event Extra
 import time
 import logging
 from pathlib import Path
-from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 from app.core.config import settings
 from app.clients.gemini import GeminiClient
 from app.storage.db import save_contact_events
 from app.utils import parse_time_str
+from app.utils.text import parse_bullet_list
 
 logger = logging.getLogger("bestieAI.pipelines.extraction")
 PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "events" / "extract.txt"
@@ -180,22 +180,18 @@ class EventExtractor:
                     candidate_models=["gemini-3.5-flash-lite", "gemini-3.8-flash"]
                 ).strip()
 
-                if "無重要事件" not in raw_output:
-                    lines = [line.strip() for line in raw_output.splitlines() if line.strip()]
-                    for e_idx, line in enumerate(lines):
-                        if line.startswith(("- ", "• ", "* ")):
-                            line = line[2:].strip()
-                        if line:
-                            item = {
-                                "id": f"event_{b_idx}_{e_idx}",
-                                "text": line,
-                                "start_time": b_start,
-                                "end_time": b_end,
-                                "message_count": len(batch),
-                                "type": "event_memory"
-                            }
-                            batch_events.append(item)
-                            event_chunks.append(item)
+                items = parse_bullet_list(raw_output)
+                for e_idx, line in enumerate(items):
+                    item = {
+                        "id": f"event_{b_idx}_{e_idx}",
+                        "text": line,
+                        "start_time": b_start,
+                        "end_time": b_end,
+                        "message_count": len(batch),
+                        "type": "event_memory"
+                    }
+                    batch_events.append(item)
+                    event_chunks.append(item)
 
             except Exception as ex:
                 logger.warning(f"批次 {b_idx + 1}/{total_batches} 提煉失敗: {ex}")

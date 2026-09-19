@@ -2,7 +2,7 @@
 db.py — 資料庫與資料結構輔助工具。
 """
 import sqlite3
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 
 def row_to_dict(row: Any) -> Dict[str, Any]:

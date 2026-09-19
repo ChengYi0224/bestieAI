@@ -13,16 +13,19 @@ llm_service.py — Gemini LLM 整合服務。
 import time
 import logging
 import functools
-import re
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 from google import genai
 from google.genai import types
 
 from app.core.config import settings
-from app.core.rate_limit import gemini_retry, _is_gemini_retryable_error
 from app.clients.gemini import GeminiClient, GeminiKeyRing
+from app.utils.text import (
+    normalize_to_bullet_lines,
+    parse_bullet_list,
+    parse_cluster_results,
+)
 
 logger = logging.getLogger("bestieAI.llm_service")
 
@@ -262,27 +265,8 @@ class LLMClient:
         template = EXTRACT_SELF_PROMPT_PATH.read_text(encoding="utf-8")
         prompt = template.format(user_query=user_query)
         target_model = model or (self.candidate_models[0] if self.candidate_models else DEFAULT_SELF_EXTRACT_MODEL)
-        result = self._generate_with_fallback(prompt, preferred_model=target_model).strip()
-        if not result or result == "無" or result.startswith("無。") or result.startswith("無\n"):
-            return ""
-
-        # 嚴格正規化輸出：每條事實獨立一行，確保一律以「- 」條列
-        normalized_lines = []
-        for line in result.splitlines():
-            line = line.strip()
-            if not line or line in ("無", "無。", "無新增事實"):
-                continue
-            if line.startswith(("- ", "• ", "* ")):
-                line = "- " + line[2:].strip()
-            elif line.startswith(("-", "•", "*")):
-                line = "- " + line[1:].strip()
-            elif re.match(r"^\d+\.\s*", line):
-                line = "- " + re.sub(r"^\d+\.\s*", "", line)
-            else:
-                line = "- " + line
-            normalized_lines.append(line)
-
-        return "\n".join(normalized_lines)
+        result = self._generate_with_fallback(prompt, preferred_model=target_model)
+        return normalize_to_bullet_lines(result)
 
     def extract_events(self, conversations_text: str, model: Optional[str] = None) -> List[str]:
         """
@@ -294,23 +278,8 @@ class LLMClient:
         template = EXTRACT_EVENTS_PROMPT_PATH.read_text(encoding="utf-8")
         prompt = template.format(conversations_text=conversations_text)
         candidates = getattr(settings, "event_extraction_models_list", None)
-        raw_output = self._generate_with_fallback(prompt, preferred_model=model, candidate_models=candidates).strip()
-
-        if not raw_output or "無重要事件" in raw_output:
-            return []
-
-        events = []
-        for line in raw_output.split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            if line.startswith(("- ", "• ", "* ")):
-                line = line[2:].strip()
-            elif line.startswith(("1.", "2.", "3.", "4.", "5.")):
-                line = line[2:].strip()
-            if line and "無重要事件" not in line:
-                events.append(line)
-        return events
+        raw_output = self._generate_with_fallback(prompt, preferred_model=model, candidate_models=candidates)
+        return parse_bullet_list(raw_output)
 
     def consolidate_events(self, cluster_events: List[str], model: Optional[str] = None) -> List[str]:
         """
@@ -347,24 +316,9 @@ class LLMClient:
         template = CONSOLIDATE_CLUSTERS_BATCH_PROMPT_PATH.read_text(encoding="utf-8")
         prompt = template.format(clusters_payload=payload)
         candidates = getattr(settings, "event_extraction_models_list", None)
-        raw_output = self._generate_with_fallback(prompt, preferred_model=model, candidate_models=candidates).strip()
+        raw_output = self._generate_with_fallback(prompt, preferred_model=model, candidate_models=candidates)
 
-        results: Dict[str, List[str]] = {}
-        pattern = r'<cluster_result\s+id="([^"]+)">([\s\S]*?)</cluster_result>'
-        matches = re.findall(pattern, raw_output)
-
-        for cid, block in matches:
-            lines = []
-            for line in block.strip().splitlines():
-                line = line.strip()
-                if line.startswith(("- ", "• ", "* ")):
-                    line = line[2:].strip()
-                elif re.match(r"^\d+\.", line):
-                    line = re.sub(r"^\d+\.\s*", "", line)
-                if line:
-                    lines.append(line)
-            if lines:
-                results[cid] = lines
+        results = parse_cluster_results(raw_output)
 
         for cid, original_events in clusters_dict.items():
             if cid not in results or not results[cid]:

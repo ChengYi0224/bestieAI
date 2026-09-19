@@ -10,17 +10,17 @@ summarization.py — 人物摘要卡與全景復盤管線（Persona Summarizatio
 """
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Any, Optional
 
-from app.core.config import settings
 from app.clients.gemini import GeminiClient
 from app.storage.db import (
     get_recent_messages,
-    get_messages,
     update_contact_summary,
     get_active_contact,
     get_contact_events,
+    should_update_summary,
 )
+from app.utils.db import row_to_dict
 
 logger = logging.getLogger("bestieAI.pipelines.summarization")
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
@@ -77,17 +77,12 @@ class Summarizer:
         db_path: Optional[Any] = None
     ) -> bool:
         """檢查特定聯絡人累積未彙總訊息數，達標或強制時更新人物摘要卡。"""
-        contact = get_active_contact(contact_id=contact_id, db_path=db_path)
-        if not contact:
+        contact_row = get_active_contact(contact_id=contact_id, db_path=db_path)
+        if not contact_row:
             return False
 
-        last_id = contact.get("last_summarized_msg_id") or 0
-        all_msgs = get_messages(contact_id=contact_id, db_path=db_path)
-        if not all_msgs:
-            return False
-
-        new_msgs = [m for m in all_msgs if m["id"] > last_id]
-        if not force and len(new_msgs) < message_threshold:
+        contact = row_to_dict(contact_row)
+        if not force and not should_update_summary(contact, threshold=message_threshold):
             return False
 
         # 優先取用已提煉的 consolidated 事件記憶 + 最近 20 則最新互動溫度
@@ -118,8 +113,7 @@ class Summarizer:
 
         summary = self.generate_concise_summary(payload)
         if summary:
-            newest_id = max(m["id"] for m in all_msgs)
-            update_contact_summary(contact_id, summary, newest_id, db_path=db_path)
-            logger.info(f"成功更新 contact_id={contact_id} 之人物摘要卡 (最新訊息 ID: {newest_id})")
+            update_contact_summary(contact_id, summary, db_path=db_path)
+            logger.info(f"成功更新 contact_id={contact_id} 之人物摘要卡")
             return True
         return False

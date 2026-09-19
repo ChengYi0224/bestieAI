@@ -4,9 +4,8 @@ consolidation.py — 同質無損融合管線（Lossless Cluster Consolidation P
 1. 自行讀取 events/consolidate_batch.txt 提示詞範本並組裝 XML Payload。
 2. 支援一次打包最多 20 個獨立 Cluster 進行批次融合，大幅節省 90% 以上 RPD。
 3. 孤立事件（單條）直接保留，0 外部請求。
-4. 呼叫 GeminiClient 執行純文字生成，並以正則安全解析各群組結果。
+4. 呼叫 GeminiClient 執行純文字生成，並呼叫解析工具萃取各群組結果。
 """
-import re
 import time
 import logging
 from pathlib import Path
@@ -14,6 +13,7 @@ from typing import List, Dict, Any, Optional
 
 from app.core.config import settings
 from app.clients.gemini import GeminiClient
+from app.utils.text import parse_cluster_results
 
 logger = logging.getLogger("bestieAI.pipelines.consolidation")
 PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "events" / "consolidate_batch.txt"
@@ -85,22 +85,7 @@ class EventConsolidator:
                     time.sleep(pacing)
 
                 # 3. 解析結果
-                pattern = r'<cluster_result\s+id="([^"]+)">([\s\S]*?)</cluster_result>'
-                matches = re.findall(pattern, raw_output)
-                results: Dict[str, List[str]] = {}
-
-                for cid, block in matches:
-                    lines = []
-                    for line in block.strip().splitlines():
-                        line = line.strip()
-                        if line.startswith(("- ", "• ", "* ")):
-                            line = line[2:].strip()
-                        elif re.match(r"^\d+\.", line):
-                            line = re.sub(r"^\d+\.\s*", "", line)
-                        if line:
-                            lines.append(line)
-                    if lines:
-                        results[cid] = lines
+                results = parse_cluster_results(raw_output)
 
                 # 4. 組裝最終 chunk，若該群組解析失敗則降級保留原事件
                 for cid, cluster in group_map.items():

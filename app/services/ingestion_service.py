@@ -34,7 +34,6 @@ PIPELINE (L1):
   5. app.pipelines.summarization.Summarizer（人物摘要卡與全景復盤）
 - 負責對話重建與向量庫同步（rebuild_vectors）。
 """
-import time
 import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
@@ -42,18 +41,15 @@ from typing import List, Dict, Any, Optional
 from app.core.config import settings
 from app.core.error_logger import log_error
 from app.clients.gemini import GeminiClient
-from app.storage.chroma_store import ChromaStore, VectorStore
+from app.storage.chroma_store import ChromaStore
 from app.utils import parse_time_str, cosine_similarity, clean_message_text
 from app.storage.db import (
     get_active_contact,
     get_messages,
-    get_recent_messages,
     update_contact_summary,
     save_contact_events,
-    get_contact_events,
-    clear_contact_events,
 )
-from app.pipelines.clustering import EventClusterer, cosine_similarity
+from app.pipelines.clustering import EventClusterer
 from app.pipelines.consolidation import EventConsolidator
 from app.pipelines.extraction import EventExtractor
 from app.pipelines.summarization import Summarizer
@@ -283,7 +279,7 @@ class IngestionPipeline:
 
         if progress_callback:
             try:
-                progress_callback(f"進行時序 Complete Linkage 向量分群中...")
+                progress_callback("進行時序 Complete Linkage 向量分群中...")
             except Exception:
                 pass
 
@@ -684,7 +680,7 @@ class IngestionPipeline:
         db_path: Optional[Any] = None
     ) -> Dict[str, Any]:
         """生成全景關係復盤長文。"""
-        from app.storage.db import get_contact_by_username, get_all_messages, update_contact_summary, get_contact_by_id
+        from app.storage.db import get_contact_by_username, get_all_messages, update_contact_summary
         if progress_callback:
             try:
                 progress_callback(f"正在讀取 {target_username} 之完整歷史對話紀錄...")
@@ -718,7 +714,7 @@ class IngestionPipeline:
             except Exception:
                 pass
 
-        from app.storage.db import update_full_history_summary, update_contact_summary
+        from app.storage.db import update_full_history_summary
         update_full_history_summary(contact_id, full_summary, db_path=db_path)
         update_contact_summary(contact_id, full_summary, db_path=db_path)
 

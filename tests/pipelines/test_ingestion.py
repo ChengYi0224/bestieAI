@@ -54,6 +54,35 @@ def test_check_and_update_summary(tmp_path):
     assert contact2["summary_card"] == "更新版摘要卡"
     mock_llm.update_summary.assert_called_once()
 
+
+def test_summarizer_check_and_update_summary(tmp_path):
+    from unittest.mock import MagicMock
+    from app.storage.db import init_db, get_or_create_contact, save_messages, get_contact_by_id
+    from app.pipelines.summarization import Summarizer
+
+    db_file = tmp_path / "test_summarizer.db"
+    init_db(db_file)
+    cid = get_or_create_contact("bob_test", "Bob", db_path=db_file)
+
+    save_messages(cid, [{"ig_item_id": "m1", "sender": "them", "content": "hello there", "sent_at": "2026-09-19T12:00:00"}], db_path=db_file)
+
+    mock_gemini = MagicMock()
+    mock_gemini.generate_text.return_value = "- 關係良好\n- 喜歡旅行"
+
+    summarizer = Summarizer(gemini_client=mock_gemini)
+
+    # 1. 訊息未達門檻且 force=False -> 不觸發更新
+    res = summarizer.check_and_update_summary(cid, force=False, message_threshold=50, db_path=db_file)
+    assert res is False
+
+    # 2. force=True -> 成功更新且不引發 TypeError 或 AttributeError
+    res = summarizer.check_and_update_summary(cid, force=True, db_path=db_file)
+    assert res is True
+
+    contact = get_contact_by_id(cid, db_path=db_file)
+    assert contact["summary_card"] == "- 關係良好\n- 喜歡旅行"
+    assert contact["new_messages_since_summary"] == 0
+
 def test_rebuild_vectors(tmp_path):
     """驗證 rebuild_vectors 從 SQLite 重建 ChromaDB，不需碰 IG API。"""
     from app.storage.db import init_db, get_or_create_contact, save_messages

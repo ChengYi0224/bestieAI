@@ -6,9 +6,8 @@ security.py — 系統安全模組。
 - 白名單發話者驗證裝飾器 (@require_whitelist)
 """
 import logging
-import functools
 from pathlib import Path
-from typing import Optional, Callable, Any
+from typing import Optional
 from cryptography.fernet import Fernet
 from app.core.config import settings
 

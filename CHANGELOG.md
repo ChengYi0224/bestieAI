@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-09-19
+
+### Changed — 文字清理與正則操作全面抽離至 Helper Functions、純化業務主流程
+
+- **Regex 與字串操作全面抽離至 Helper Functions**：將散落於各 Method 內部的 Regex（如清單前綴、有序編號、XML 標籤、LINE 對話紀錄行與日期格式）及手動字串切片/清洗，全數預編譯並抽離封裝至 `app/utils/text.py`（提供 `strip_bullet_prefix`、`parse_bullet_list`、`normalize_to_bullet_lines`、`extract_tagged_blocks`、`parse_cluster_results`、`extract_leading_date`、`parse_line_chat_date_header`、`parse_line_chat_message`）。各 Pipeline、Service 與 Source Method（`LLMClient`、`EventConsolidator`、`EventExtractor`、`EventClusterer`、`FileImportAdapter`）一律僅呼叫 Helper 與傳參，主業務流程一目了然，除 `app/utils/text.py` 外專案其餘業務模組完全消除 `import re`。
+- **app/utils/ 模組化與 High-level / Low-level 分離**：建立專屬目錄，依 domain 精簡分檔（`time.py`、`math.py`、`text.py`、`db.py`）並於 `__init__.py` 統一 export。Pipelines、Handlers 與 Services 僅保留 high-level 調度，所有純運算、時間解析（相容 ISO 8601、Z 補償、YYYY-MM-DD）、文字清理、Cosine 向量計算與 DB Mapping 抽離至 utils 底層。
+- **修復 Summarizer.check_and_update_summary 呼叫與 Row 存取**：修正 `app/pipelines/summarization.py` 中 `update_contact_summary` 多傳 `newest_id` 導致 `db_path` 被覆寫引發 TypeError 的問題，並改用 `row_to_dict` 與 `should_update_summary` 判斷未彙總訊息數，避免在 `sqlite3.Row` 呼叫 `.get()` 導致 AttributeError。
+- **Git Pre-commit 強制檢查防護機制**：實作 `scripts/pre_commit_check.py` 並配置 `.git/hooks/pre-commit`。在執行 `git commit` 時自動依序觸發「全專案 AST 語法編譯（compileall）」、「靜態程式碼分析（ruff select F）」以及「全量單元測試（pytest）」，任一環節失敗即阻斷 commit，防止語法或未定義變數流入版本庫。
+- **單元測試覆蓋**：於 `tests/unit/test_utils.py` 補齊清單符號與序號剝除、多行清單正規化、XML 標籤解析、日期萃取與 LINE 訊息解析等 13 項單元測試；於 `tests/pipelines/test_ingestion.py` 新增 `Summarizer.check_and_update_summary` 測試，全量 105 項測試通過。
+
 ## [0.6.0] - 2026-09-19
 
 ### Changed — Gemini 呼叫防卡死、消除雙軌架構與模型重試參數化
@@ -21,10 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Poller 訊息同步整合**：`BotPoller` 實作 `_sync_contact_messages`，透過 `SourceAdapterFactory` 取得 Instagram Adapter 抓取新訊息並以 `save_messages` 寫入資料庫，並將其綁定至 `CommandRouter` 與 `ChatHandler`。
 - **命令列參數支援 (`-E` / `--external`)**：於 `tests/conftest.py` 註冊 `-E` 與 `--external` 旗標；常規執行 `uv run pytest` 時自動跳過（Skip）所有標記 `@pytest.mark.external` 的測試，避免消耗 Token 與依賴外部網路。
 - **真實外部 API 連線合約測試**：新增 `tests/contracts/test_external_api.py`，自動檢測環境變數是否配置 Gemini 金鑰或 Instagram 帳密，未提供時自動 Skip，有提供時獨立執行真實端點呼叫與連通性檢測。
-- **app/utils/ 模組化與 High-level / Low-level 分離**：建立專屬目錄，依 domain 精簡分檔（`time.py`、`math.py`、`text.py`、`db.py`）並於 `__init__.py` 統一 export。Pipelines、Handlers 與 Services 僅保留 high-level 調度，所有純運算、時間解析（相容 ISO 8601、Z 補償、YYYY-MM-DD）、文字清理、Cosine 向量計算與 DB Mapping 抽離至 utils 底層。
 - **模型調用參數化 (Dependency Injection)**：`ChatHandler`、`CommandService` 與 `CommandRouter` 全面支援 `model` 與 `self_extract_model` 傳參；`LLMClient.extract_self_info` 預設直接繼承 instance 首選主模型（`self.candidate_models[0]` 即 `gemini-3.8-flash`），不再 fallback 至 `flash-lite`。
 - **訊息 Incremental Sync (Early Stopping)**：`IGClient.get_thread_messages`、`InstagramAdapter.fetch_messages`、`IngestionPipeline.sync_messages` 與 `BotPoller._sync_contact_messages` 全面支援 `stop_item_ids` 錨點。Paging 往回爬取時，一旦偵測到 local 已存的 `item_id` 即刻 break 結束翻頁 (Early Stopping)。同時移除 `amount=0` 時強制抓取 5000 則之設定，常態 Incremental Sync 耗時由數十分鐘降至 1~2 秒。
-- **單元測試覆蓋**：於 `tests/unit/test_gemini_keyring.py`、`tests/bot/test_router.py`、`tests/bot/test_poller.py`、`tests/bot/test_self_rag.py`、`tests/sources/test_source_adapters.py`、`tests/storage/test_db.py` 與 `tests/unit/test_utils.py` 補齊 Early Stopping 中斷、local ID 查詢、Auto-Sync 觸發與例外 Fallback、Thinking Budget 與 Timeout 設定、模型傳參驗證、以及各項 utils 邊界測試。
+- **單元測試覆蓋**：於 `tests/unit/test_gemini_keyring.py`、`tests/bot/test_router.py`、`tests/bot/test_poller.py`、`tests/bot/test_self_rag.py`、`tests/sources/test_source_adapters.py`、`tests/storage/test_db.py` 補齊 Early Stopping 中斷、local ID 查詢、Auto-Sync 觸發與例外 Fallback、Thinking Budget 與 Timeout 設定以及模型傳參驗證。
 
 ## [0.5.0] - 2026-09-18
 

@@ -1,7 +1,7 @@
 """
 help.py — 說明指令 Handler。
 """
-from app.commands.base import BaseCommand, CommandResult
+from app.commands.base import CommandResult
 from app.commands.commands import HelpCommand
 from app.core.config import settings
 

@@ -27,7 +27,7 @@ from typing import Optional, Any, Callable
 
 from app.commands.base import BaseCommand, CommandResult
 from app.commands.bus import CommandBus
-from app.commands.commands import HelpCommand, ChatCommand
+from app.commands.commands import HelpCommand
 from app.commands.handlers import CommandService, create_default_command_bus
 from app.commands.parsers import CommandParserRegistry
 from app.storage.db import get_pending_selection
