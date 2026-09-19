@@ -20,8 +20,10 @@ from app.storage.db import (
     get_contacts_with_nickname,
 )
 from app.storage.vectors import VectorStore
+from app.utils.text import format_chat_messages
 
 logger = logging.getLogger("bestieAI.memory_service")
+
 
 # ==================== 可調參數與檢索筆數設定 (Tunable Constants) ====================
 # 目標對象事件向量檢索筆數
@@ -144,12 +146,7 @@ class MemoryManager:
             limit=settings.RECENT_MESSAGES_LIMIT,
             db_path=self.db_path,
         )
-        formatted_recent = []
-        for msg in recent_msgs:
-            sender_label = "我" if msg["sender"] == "me" else "對方"
-            time_prefix = f"[{msg['sent_at']}] " if "sent_at" in msg.keys() and msg["sent_at"] else ""
-            formatted_recent.append(f"{time_prefix}{sender_label}: {msg['content']}")
-        recent_context_str = "\n".join(formatted_recent)
+        recent_context_str = format_chat_messages(recent_msgs, other_label="對方")
 
         # 2. 共享單次 Query Embedding
         query_embedding: Optional[List[float]] = None

@@ -1,8 +1,13 @@
 """
 text.py — 文字清理與字串處理通用工具。
 """
+from datetime import datetime
 import re
-from typing import Optional, List, Tuple, Dict
+from typing import Optional, List, Tuple, Dict, Any, Sequence
+
+from app.utils.time import parse_time_str
+from app.utils.db import get_row_field
+
 
 # 預編譯正則表示式
 _BULLET_PREFIX_RE = re.compile(r"^(?:[-*•]\s*|\d+[\.\)]\s*)")
@@ -139,3 +144,88 @@ def parse_line_chat_message(line: str) -> Optional[Tuple[str, str, str]]:
         return None
     time_str, sender_raw, content = m.groups()
     return time_str, sender_raw, content
+
+
+def extract_date_and_time(time_val: Optional[Any]) -> Tuple[Optional[str], Optional[str]]:
+    """
+    從時間字串或 datetime 中提取 (date_str, time_str)。
+    例如:
+      '2026-09-19T10:00:00' -> ('2026-09-19', '10:00:00')
+      '2026-09-19'          -> ('2026-09-19', None)
+      None                  -> (None, None)
+    """
+    if not time_val:
+        return None, None
+    if isinstance(time_val, datetime):
+        return time_val.strftime("%Y-%m-%d"), time_val.strftime("%H:%M:%S")
+
+    raw = str(time_val).strip()
+    if not raw:
+        return None, None
+
+    # 嘗試標準解析
+    dt = parse_time_str(raw)
+    if dt:
+        date_str = dt.strftime("%Y-%m-%d")
+        # 若原始字串未包含時間資訊（如長度 <= 10 的純日期）
+        if len(raw) <= 10 and not (":" in raw):
+            return date_str, None
+        return date_str, dt.strftime("%H:%M:%S")
+
+    # Fallback: 正則提取
+    date_str = extract_leading_date(raw)
+    time_match = re.search(r"(\d{1,2}:\d{2}(?::\d{2})?)", raw)
+    time_str = time_match.group(1) if time_match else None
+    if time_str and len(time_str) == 5:
+        time_str += ":00"
+    return date_str, time_str
+
+
+def format_chat_messages(
+    messages: Sequence[Any],
+    other_label: str = "對方",
+    date_header_format: str = "--- {date} ---",
+) -> str:
+    """
+    將對話紀錄依照日期分區 (Section) 格式化輸出，每則對話僅標註時間與發送者。
+
+    格式範例:
+      --- 2026-09-19 ---
+      [10:00:00] 我: 早安
+      [10:01:00] 對方: 早安呀！
+    """
+    if not messages:
+        return ""
+
+    sections: List[str] = []
+    current_date: Optional[str] = None
+    current_lines: List[str] = []
+
+    def flush_current_section():
+        nonlocal current_lines, current_date
+        if not current_lines:
+            return
+        if current_date:
+            header = date_header_format.format(date=current_date)
+            sections.append(f"{header}\n" + "\n".join(current_lines))
+        else:
+            sections.append("\n".join(current_lines))
+        current_lines = []
+
+    for m in messages:
+        sent_at = get_row_field(m, "sent_at")
+        sender = get_row_field(m, "sender")
+        content = get_row_field(m, "content") or ""
+
+        sender_label = "我" if sender == "me" else other_label
+        date_str, time_str = extract_date_and_time(sent_at)
+
+        if date_str != current_date:
+            flush_current_section()
+            current_date = date_str
+
+        time_prefix = f"[{time_str}] " if time_str else ""
+        current_lines.append(f"{time_prefix}{sender_label}: {content}")
+
+    flush_current_section()
+    return "\n\n".join(sections)

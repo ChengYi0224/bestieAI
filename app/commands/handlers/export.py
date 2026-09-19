@@ -22,8 +22,10 @@ from typing import Any, Optional, Callable
 
 from app.commands.base import CommandResult
 from app.commands.commands import ExportCommand
-from app.storage.db import get_active_contact, get_recent_messages, get_connection
+from app.storage.repositories import ContactRepository, MessageRepository
 from app.utils.db import row_to_dict, get_row_field
+from app.utils.text import format_chat_messages
+
 
 logger = logging.getLogger("bestieAI.export_handler")
 
@@ -33,26 +35,22 @@ class ExportHandler:
 
     def __init__(
         self,
-        db_path: Optional[Any] = None,
+        contact_repo: Optional[ContactRepository] = None,
+        message_repo: Optional[MessageRepository] = None,
         sync_callback: Optional[Callable[[str], Any]] = None,
+        db_path: Optional[Any] = None,
     ):
-        self.db_path = db_path
+        self.contact_repo = contact_repo or ContactRepository(db_path)
+        self.message_repo = message_repo or MessageRepository(db_path)
         self.sync_callback = sync_callback
 
     def handle_export(self, cmd: ExportCommand) -> CommandResult:
-        conn = get_connection(self.db_path)
-        cursor = conn.cursor()
-        contact = None
+        contact = (
+            self.contact_repo.find_by_identifier(cmd.target)
+            if cmd.target
+            else self.contact_repo.get_active()
+        )
 
-        if cmd.target:
-            cursor.execute("""
-                SELECT * FROM contacts
-                WHERE LOWER(ig_account_id) = LOWER(?) OR LOWER(display_name) = LOWER(?) OR LOWER(nickname) = LOWER(?)
-            """, (cmd.target, cmd.target, cmd.target))
-            contact = cursor.fetchone()
-        else:
-            contact = get_active_contact(db_path=self.db_path)
-        conn.close()
 
         if not contact:
             if cmd.target:
@@ -77,7 +75,8 @@ class ExportHandler:
 
         # 從本地 SQLite 取得最新對話
         limit = max(1, cmd.limit)
-        messages = get_recent_messages(contact_id=contact_id, limit=limit, db_path=self.db_path)
+        messages = self.message_repo.get_recent(contact_id=contact_id, limit=limit)
+
         if not messages:
             return CommandResult(
                 success=True,
@@ -86,16 +85,9 @@ class ExportHandler:
             )
 
         # 格式化輸出
-        lines = [f"【與 {target_label} 的最新 {len(messages)} 則對話紀錄】"]
-        for m in messages:
-            sent_at = get_row_field(m, "sent_at") or ""
-            sender_type = get_row_field(m, "sender")
-            sender_label = "我" if sender_type == "me" else target_label
-            content = get_row_field(m, "content") or ""
-            time_prefix = f"[{sent_at}] " if sent_at else ""
-            lines.append(f"{time_prefix}{sender_label}: {content}")
-
-        formatted_text = "\n".join(lines)
+        header = f"【與 {target_label} 的最新 {len(messages)} 則對話紀錄】"
+        formatted_messages = format_chat_messages(messages, other_label=target_label)
+        formatted_text = f"{header}\n\n{formatted_messages}" if formatted_messages else header
         return CommandResult(
             success=True,
             message=formatted_text,

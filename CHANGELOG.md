@@ -5,7 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-09-19
+
+### Changed — 對話輸出日期分區、資料存取層模組化與 Handler DI 注入
+
+- **對話紀錄輸出依日期分區（Date Section）與時間標籤**：
+  - 於 `app/utils/text.py` 實作通用輔助函式 `extract_date_and_time` 與 `format_chat_messages`。
+  - 將對話紀錄依日期自動分區（例如 `--- 2026-09-19 ---`），內部每行訊息僅標註時間前綴（例如 `[10:00:00] 我: 早安`），改善終端視覺排版並節省 LLM Token。
+  - `exp` 指令（`ExportHandler`）、陪聊 Prompt 上下文（`MemoryManager`）、摘要更新（`Summarizer` / `IngestionPipeline`）與事件提煉（`EventExtractor`）全面改用此 Helper。
+- **資料存取層按存取對象模組化 (`app/storage/repositories/`)**：
+  - 將原單一檔案 `repositories.py` 依 Entity 存取對象拆分為獨立模組目錄：
+    - `base.py`：`BaseRepository` 與自動交易裝飾器 `with_connection`。
+    - `contacts.py`：`ContactRepository`（新增 `find_by_identifier` 支援帳號/顯示名稱/暱稱比對、`get_tracked_contacts` 查詢追蹤名單）。
+    - `messages.py`：`MessageRepository`。
+    - `bot_state.py`：`BotStateRepository`。
+    - `events.py`：`EventRepository`。
+    - `__init__.py`：統一匯出，維持向後相容。
+- **瘦身 `app/storage/db.py`**：
+  - 回歸連線工廠（`get_connection`）、Schema 定義與遷移（`init_db`）與業務門檻純運算（`should_update_summary`）。
+- **Handler 全面改用 Dependency Injection (DI) 注入**：
+  - `CommandService` 作為 DI 組合點（Composition Root），集中實例化 Repositories 並注入子 Handler。
+  - `ContactHandler`、`ExportHandler`、`MemoryHandler`、`ChatHandler` 僅持有注入之 Repository，不自持 `db_path` 或自行建立連線。
+- **徹底消除非資料層 Raw SQL**：
+  - 清理 `export.py`、`contact.py`、`memory.py` 與 `poller.py` 中所有 Raw SQL 與手動連線管理，全專案 `app/storage/` 之外 0 處 SQL。
+- **單元測試覆蓋**：
+  - 於 `tests/unit/test_utils.py` 增加 `extract_date_and_time` 與 `format_chat_messages` 測試。
+  - 於 `tests/storage/test_db.py` 增加 `find_by_identifier`、`get_tracked_contacts` 與 Handler DI 測試，全量 113 個測試通過（2 skipped）。
+
 ## [0.8.0] - 2026-09-19
+
 
 ### Added — 對話紀錄匯出指令 (`exp <num> [-I]`) 與即時同步
 

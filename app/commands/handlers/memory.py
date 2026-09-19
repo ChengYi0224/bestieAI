@@ -18,16 +18,21 @@ from app.commands.commands import (
     MeCommand, CardCommand, RefreshSummaryCommand,
     SummarizeHistoryCommand, SyncCommand, RebuildVectorsCommand,
 )
-from app.storage.db import get_active_contact, get_connection
+from app.storage.repositories import ContactRepository
 from app.services.memory_service import MemoryManager
 
 
 class MemoryHandler:
-    """記憶庫與摘要 Handler。依賴 MemoryManager 與 db_path。"""
+    """記憶庫與摘要 Handler。依賴 MemoryManager 與 ContactRepository。"""
 
-    def __init__(self, memory_manager: MemoryManager, db_path: Optional[Any] = None):
+    def __init__(
+        self,
+        memory_manager: MemoryManager,
+        contact_repo: Optional[ContactRepository] = None,
+        db_path: Optional[Any] = None,
+    ):
         self.memory_manager = memory_manager
-        self.db_path = db_path
+        self.contact_repo = contact_repo or ContactRepository(db_path)
 
     def handle_me(self, cmd: MeCommand) -> CommandResult:
         if not cmd.content.strip():
@@ -39,17 +44,12 @@ class MemoryHandler:
             return CommandResult(success=False, message=f"記錄失敗: {e}")
 
     def handle_card(self, cmd: CardCommand) -> CommandResult:
-        conn = get_connection(self.db_path)
-        cursor = conn.cursor()
-        if cmd.target:
-            cursor.execute("""
-                SELECT * FROM contacts
-                WHERE LOWER(ig_account_id) = LOWER(?) OR LOWER(display_name) = LOWER(?) OR LOWER(nickname) = LOWER(?)
-            """, (cmd.target, cmd.target, cmd.target))
-            contact = cursor.fetchone()
-        else:
-            contact = get_active_contact(db_path=self.db_path)
-        conn.close()
+        contact = (
+            self.contact_repo.find_by_identifier(cmd.target)
+            if cmd.target
+            else self.contact_repo.get_active()
+        )
+
 
         if not contact:
             if cmd.target:

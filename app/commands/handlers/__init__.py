@@ -39,6 +39,9 @@ __all__ = [
 ]
 
 
+from app.storage.repositories import ContactRepository, MessageRepository, BotStateRepository
+
+
 class CommandService:
     """
     向後相容 Facade：聚合所有領域 Handler。
@@ -53,29 +56,44 @@ class CommandService:
         sync_callback: Optional[Callable[[str], Any]] = None,
         model: Optional[str] = None,
         self_extract_model: Optional[str] = None,
+        contact_repo: Optional[ContactRepository] = None,
+        message_repo: Optional[MessageRepository] = None,
+        bot_state_repo: Optional[BotStateRepository] = None,
     ):
-        # 根組合點：只在這裡建立依賴，子 Handler 從外部接收
+        # 根組合點：在此建立或接收 Repositories，以 DI 注入子 Handler
         mm = memory_manager or MemoryManager()
         lc = llm_client or LLMClient()
+        cr = contact_repo or ContactRepository(db_path)
+        mr = message_repo or MessageRepository(db_path)
+        bsr = bot_state_repo or BotStateRepository(db_path)
 
         self._help = HelpHandler()
-        self._contact = ContactHandler(db_path=db_path)
-        self._memory = MemoryHandler(memory_manager=mm, db_path=db_path)
+        self._contact = ContactHandler(contact_repo=cr, bot_state_repo=bsr)
+        self._memory = MemoryHandler(memory_manager=mm, contact_repo=cr)
         self._chat = ChatHandler(
             memory_manager=mm,
             llm_client=lc,
-            db_path=db_path,
+            contact_repo=cr,
+            bot_state_repo=bsr,
             sync_callback=sync_callback,
             model=model,
             self_extract_model=self_extract_model,
         )
         self._follower = FollowerHandler()
-        self._export = ExportHandler(db_path=db_path, sync_callback=sync_callback)
+        self._export = ExportHandler(
+            contact_repo=cr,
+            message_repo=mr,
+            sync_callback=sync_callback,
+        )
 
         # 向後相容屬性
         self.memory_manager = mm
         self.llm_client = lc
         self.db_path = db_path
+        self.contact_repo = cr
+        self.message_repo = mr
+        self.bot_state_repo = bsr
+
 
     # ── Help ──────────────────────────────────────────────────────────────────
     def handle_help(self, cmd: HelpCommand):

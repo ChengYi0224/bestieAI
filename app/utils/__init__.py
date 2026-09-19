@@ -15,6 +15,8 @@ from app.utils.text import (
     extract_leading_date,
     parse_line_chat_date_header,
     parse_line_chat_message,
+    extract_date_and_time,
+    format_chat_messages,
 )
 from app.utils.db import row_to_dict, get_row_field
 
@@ -34,6 +36,9 @@ __all__ = [
     "extract_leading_date",
     "parse_line_chat_date_header",
     "parse_line_chat_message",
+    "extract_date_and_time",
+    "format_chat_messages",
     "row_to_dict",
     "get_row_field",
 ]
+

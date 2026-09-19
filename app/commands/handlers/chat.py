@@ -28,15 +28,10 @@ from typing import Any, Optional, Callable
 
 from app.commands.base import CommandResult
 from app.commands.commands import ChatCommand
+
 from app.core.config import settings
 from app.core.error_logger import log_error
-from app.storage.db import (
-    add_bot_conversation,
-    get_contacts_with_nickname,
-    get_worker_status,
-    set_worker_status,
-    get_active_contact,
-)
+from app.storage.repositories import ContactRepository, BotStateRepository
 from app.services.memory_service import MemoryManager
 from app.services.llm_service import LLMClient
 
@@ -44,23 +39,27 @@ logger = logging.getLogger("bestieAI.chat_handler")
 
 
 class ChatHandler:
-    """AI 聊天 Handler。依賴 MemoryManager 與 LLMClient。"""
+    """AI 聊天 Handler。依賴 MemoryManager, LLMClient, ContactRepository 與 BotStateRepository。"""
 
     def __init__(
         self,
         memory_manager: MemoryManager,
         llm_client: LLMClient,
-        db_path: Optional[Any] = None,
+        contact_repo: Optional[ContactRepository] = None,
+        bot_state_repo: Optional[BotStateRepository] = None,
         sync_callback: Optional[Callable[[str], Any]] = None,
         model: Optional[str] = None,
         self_extract_model: Optional[str] = None,
+        db_path: Optional[Any] = None,
     ):
         self.memory_manager = memory_manager
         self.llm_client = llm_client
-        self.db_path = db_path
+        self.contact_repo = contact_repo or ContactRepository(db_path)
+        self.bot_state_repo = bot_state_repo or BotStateRepository(db_path)
         self.sync_callback = sync_callback
         self.model = model
         self.self_extract_model = self_extract_model
+
 
     def handle_chat(self, cmd: ChatCommand) -> CommandResult:
         user_text = cmd.text
@@ -69,7 +68,7 @@ class ChatHandler:
         if self.sync_callback:
             try:
                 from app.utils import get_row_field
-                active = get_active_contact(db_path=self.db_path)
+                active = self.contact_repo.get_active()
                 target_id = get_row_field(active, "ig_account_id")
                 if target_id:
                     self.sync_callback(target_id)
@@ -85,13 +84,13 @@ class ChatHandler:
 
         contact, summary_card, rag_chunks, recent_context, chat_history, self_context = ctx
         contact_id = contact["id"]
-        add_bot_conversation(role="user", content=user_text, contact_id=contact_id)
+        self.bot_state_repo.add_conversation(role="user", content=user_text, contact_id=contact_id)
 
         # 暱稱掃描：跨對象 RAG
         cross_rag_list = []
         try:
             query_emb = getattr(self.memory_manager, "last_query_embedding", None)
-            contacts_with_nick = get_contacts_with_nickname(db_path=self.db_path)
+            contacts_with_nick = self.contact_repo.get_with_nickname()
             for c in contacts_with_nick:
                 nick = c["nickname"]
                 if nick and (nick.lower() in user_text.lower()) and c["id"] != contact_id:
@@ -121,22 +120,22 @@ class ChatHandler:
             model=self.model,
         )
 
-        add_bot_conversation(role="assistant", content=reply, contact_id=contact_id)
+        self.bot_state_repo.add_conversation(role="assistant", content=reply, contact_id=contact_id)
 
         # 背景非同步萃取使用者自身相關資訊
         def _async_extract():
             from app.utils import now_utc_iso
-            w_status = get_worker_status(db_path=self.db_path)
+            w_status = self.bot_state_repo.get_worker_status()
             is_idle = not (w_status and w_status.get("running"))
             if is_idle:
-                set_worker_status({
+                self.bot_state_repo.set_worker_status({
                     "running": True,
                     "target": "user_self",
                     "mode": "自身偏好記憶萃取",
                     "detail": "正在非同步分析並萃取對話中的個人偏好事實...",
                     "start_time": time.time(),
                     "last_update": now_utc_iso()
-                }, db_path=self.db_path)
+                })
 
             try:
                 extract_model = self.self_extract_model or self.model
@@ -149,12 +148,12 @@ class ChatHandler:
                 log_error(e, context="ChatHandler._async_extract", logger_name="bestieAI.chat_handler")
             finally:
                 if is_idle:
-                    set_worker_status({
+                    self.bot_state_repo.set_worker_status({
                         "running": False,
                         "target": "user_self",
                         "completed_at": now_utc_iso(),
                         "detail": "自身記憶萃取完成"
-                    }, db_path=self.db_path)
+                    })
 
         threading.Thread(target=_async_extract, daemon=True).start()
 

@@ -194,8 +194,9 @@ def test_export_command_handling(test_env):
     res_imm = bus.dispatch(ExportCommand(limit=2, immediate=True))
     assert res_imm.success is True
     assert res_imm.data["count"] == 2
-    assert "你好呀！" in res_imm.message
-    assert "今天天氣真好" in res_imm.message
+    assert "--- 2026-09-19 ---" in res_imm.message
+    assert "[10:01:00] 我: 你好呀！" in res_imm.message
+    assert "[10:02:00] Target: 今天天氣真好" in res_imm.message
     mock_sync.assert_not_called()
 
     # 4. 測試 ExportCommand (immediate=False, 預設先呼叫 sync)
@@ -203,7 +204,9 @@ def test_export_command_handling(test_env):
     assert res_sync.success is True
     assert res_sync.data["count"] == 3
     mock_sync.assert_called_once_with("target_user")
-    assert "哈囉！" in res_sync.message
+    assert "--- 2026-09-19 ---" in res_sync.message
+    assert "[10:00:00] Target: 哈囉！" in res_sync.message
+
 
 
 def test_help_command_categorization(test_env):

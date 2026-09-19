@@ -21,8 +21,10 @@ from app.storage.db import (
     should_update_summary,
 )
 from app.utils.db import row_to_dict
+from app.utils.text import format_chat_messages
 
 logger = logging.getLogger("bestieAI.pipelines.summarization")
+
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 CONCISE_SUMMARY_PROMPT_PATH = PROMPTS_DIR / "summary" / "concise.txt"
 SUMMARY_PROMPT_PATH = PROMPTS_DIR / "summary" / "summary.txt"
@@ -98,16 +100,12 @@ class Summarizer:
             sections.append("【過往重要事件記憶（Consolidated Events）】:\n" + "\n".join(ev_lines))
 
             if recent_msgs:
-                msg_lines = []
-                for m in recent_msgs:
-                    sender_label = "我" if m["sender"] == "me" else "對方"
-                    time_prefix = f"[{m['sent_at']}] " if m["sent_at"] else ""
-                    msg_lines.append(f"{time_prefix}{sender_label}: {m['content']}")
-                sections.append("【最近 20 則最新互動紀錄（即時氛圍與溫度）】:\n" + "\n".join(msg_lines))
+                recent_formatted = format_chat_messages(recent_msgs, other_label="對方")
+                sections.append(f"【最近 {len(recent_msgs)} 則最新互動紀錄（即時氛圍與溫度）】:\n{recent_formatted}")
 
             payload = "\n\n".join(sections)
         elif recent_msgs:
-            payload = "\n".join(f"[{m['sent_at']}] {m['sender']}: {m['content']}" for m in recent_msgs)
+            payload = format_chat_messages(recent_msgs, other_label="對方")
         else:
             return False
 

@@ -15,7 +15,8 @@ from app.core.config import settings
 from app.clients.gemini import GeminiClient
 from app.storage.db import save_contact_events
 from app.utils import parse_time_str
-from app.utils.text import parse_bullet_list
+from app.utils.text import parse_bullet_list, format_chat_messages
+
 
 logger = logging.getLogger("bestieAI.pipelines.extraction")
 PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "events" / "extract.txt"
@@ -165,11 +166,7 @@ class EventExtractor:
                 except Exception:
                     pass
 
-            formatted_lines = []
-            for m in batch:
-                sender_label = "我" if m["sender"] == "me" else "對方"
-                formatted_lines.append(f"[{m['sent_at']}] {sender_label}: {m['content']}")
-            conv_text = "\n".join(formatted_lines)
+            conv_text = format_chat_messages(batch, other_label="對方")
             prompt = template.format(conversations_text=conv_text)
 
             batch_events = []

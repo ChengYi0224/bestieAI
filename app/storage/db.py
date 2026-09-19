@@ -278,3 +278,19 @@ def clear_contact_events(
     from app.storage.repositories import EventRepository
     EventRepository(db_path).clear_events(contact_id, status=status)
 
+
+def find_contact_by_identifier(identifier: str, db_path: Optional[Path] = None) -> Optional[sqlite3.Row]:
+    from app.storage.repositories import ContactRepository
+    return ContactRepository(db_path).find_by_identifier(identifier)
+
+
+def get_tracked_contacts(db_path: Optional[Path] = None) -> List[sqlite3.Row]:
+    from app.storage.repositories import ContactRepository
+    return ContactRepository(db_path).get_tracked_contacts()
+
+
+def untrack_contact(ig_account_id: str, db_path: Optional[Path] = None) -> bool:
+    from app.storage.repositories import ContactRepository
+    return ContactRepository(db_path).untrack(ig_account_id)
+
+

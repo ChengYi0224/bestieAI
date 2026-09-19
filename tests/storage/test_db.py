@@ -95,3 +95,77 @@ def test_get_latest_item_ids(temp_db):
     assert "item_102" in ids
     assert "item_101" not in ids
 
+
+def test_contact_repository_find_and_tracked(temp_db):
+    from app.storage.repositories import ContactRepository
+    repo = ContactRepository(temp_db)
+
+    # 建立多個測試聯絡人
+    c1 = repo.get_or_create("user_alpha", "Alpha Test")
+    repo.set_nickname(c1, "小阿")
+    c2 = repo.get_or_create("user_beta", "Beta Test")
+
+    # 1. 依 IG 帳號尋找（不分大小寫）
+    found_id = repo.find_by_identifier("USER_ALPHA")
+    assert found_id is not None
+    assert found_id["ig_account_id"] == "user_alpha"
+
+    # 2. 依顯示名稱尋找
+    found_name = repo.find_by_identifier("Beta Test")
+    assert found_name is not None
+    assert found_name["ig_account_id"] == "user_beta"
+
+    # 3. 依暱稱尋找
+    found_nick = repo.find_by_identifier("小阿")
+    assert found_nick is not None
+    assert found_nick["id"] == c1
+
+    # 4. 查無對象
+    assert repo.find_by_identifier("not_exist") is None
+    assert repo.find_by_identifier("") is None
+
+    # 5. 測試 get_tracked_contacts
+    tracked = repo.get_tracked_contacts()
+    assert len(tracked) == 2
+
+    # 將其中一位設為 untracked
+    repo.untrack("user_alpha")
+    tracked_after = repo.get_tracked_contacts()
+    assert len(tracked_after) == 1
+    assert tracked_after[0]["ig_account_id"] == "user_beta"
+
+
+def test_handler_dependency_injection(temp_db):
+    from unittest.mock import MagicMock
+    from app.commands.handlers.contact import ContactHandler
+    from app.commands.handlers.export import ExportHandler
+    from app.commands.commands import ListContactsCommand, ExportCommand
+
+    mock_contact_repo = MagicMock()
+    mock_contact_repo.list_all.return_value = [
+        {"ig_account_id": "mock_user", "display_name": "Mock", "nickname": None, "status": "tracked"}
+    ]
+    mock_contact_repo.find_by_identifier.return_value = {
+        "id": 1, "ig_account_id": "mock_user", "display_name": "Mock", "nickname": None
+    }
+
+    mock_msg_repo = MagicMock()
+    mock_msg_repo.get_recent.return_value = [
+        {"sender": "them", "content": "你好", "sent_at": "2026-09-19T10:00:00"}
+    ]
+
+    # 驗證 Handler 透過 DI 接收 Mock Repository
+    contact_h = ContactHandler(contact_repo=mock_contact_repo)
+    res_list = contact_h.handle_list(ListContactsCommand())
+    assert res_list.success is True
+    assert "mock_user" in res_list.message
+    mock_contact_repo.list_all.assert_called_once()
+
+    export_h = ExportHandler(contact_repo=mock_contact_repo, message_repo=mock_msg_repo)
+    res_exp = export_h.handle_export(ExportCommand(target="mock_user", immediate=True))
+    assert res_exp.success is True
+    assert "你好" in res_exp.message
+    mock_contact_repo.find_by_identifier.assert_called_once_with("mock_user")
+    mock_msg_repo.get_recent.assert_called_once_with(contact_id=1, limit=20)
+
+

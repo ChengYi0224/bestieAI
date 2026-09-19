@@ -564,12 +564,9 @@ class BotPoller:
 
     def _check_periodic_summaries(self) -> None:
         try:
-            from app.storage.db import get_connection
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, ig_account_id FROM contacts WHERE status = 'tracked'")
-            rows = cursor.fetchall()
-            conn.close()
+            from app.storage.repositories import ContactRepository
+            contact_repo = ContactRepository()
+            rows = contact_repo.get_tracked_contacts()
             for r in rows:
                 updated = self.ingestion.check_and_update_summary(r["id"])
                 if updated:
@@ -577,6 +574,7 @@ class BotPoller:
         except Exception as e:
             logger.error(f"定期檢查摘要更新失敗: {e}")
             log_error(e, context="BotPoller._check_periodic_summaries", logger_name="bestieAI.bot_poller")
+
 
     def run(self) -> None:
         logger.info("正在啟動 Bot 服務...")

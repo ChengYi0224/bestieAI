@@ -18,8 +18,11 @@ from app.utils.text import (
     extract_leading_date,
     parse_line_chat_date_header,
     parse_line_chat_message,
+    extract_date_and_time,
+    format_chat_messages,
 )
 from app.utils.db import row_to_dict, get_row_field
+
 
 
 # ==================== Time Utils ====================
@@ -215,3 +218,64 @@ def test_row_to_dict_and_get_field():
     # 測試 None
     assert row_to_dict(None) == {}
     assert get_row_field(None, "any", default=42) == 42
+
+
+# ==================== Chat Message Formatting Utils ====================
+
+def test_extract_date_and_time():
+    # ISO 帶 T 與時間
+    d, t = extract_date_and_time("2026-09-19T10:15:30")
+    assert d == "2026-09-19"
+    assert t == "10:15:30"
+
+    # 空格分隔
+    d, t = extract_date_and_time("2026-09-19 14:20:00")
+    assert d == "2026-09-19"
+    assert t == "14:20:00"
+
+    # 純日期無時間
+    d, t = extract_date_and_time("2026-09-19")
+    assert d == "2026-09-19"
+    assert t is None
+
+    # datetime 物件
+    dt = datetime(2026, 9, 19, 8, 30, 0)
+    d, t = extract_date_and_time(dt)
+    assert d == "2026-09-19"
+    assert t == "08:30:00"
+
+    # 空值與無效格式
+    assert extract_date_and_time(None) == (None, None)
+    assert extract_date_and_time("") == (None, None)
+
+
+def test_format_chat_messages_grouping_and_sections():
+    messages = [
+        {"sender": "them", "content": "哈囉！", "sent_at": "2026-09-18T22:30:00"},
+        {"sender": "me", "content": "晚安", "sent_at": "2026-09-18T22:31:00"},
+        {"sender": "them", "content": "早安呀！", "sent_at": "2026-09-19T09:00:00"},
+        {"sender": "me", "content": "今天天氣真好", "sent_at": "2026-09-19T09:01:00"},
+    ]
+
+    formatted = format_chat_messages(messages, other_label="小美")
+    expected = (
+        "--- 2026-09-18 ---\n"
+        "[22:30:00] 小美: 哈囉！\n"
+        "[22:31:00] 我: 晚安\n\n"
+        "--- 2026-09-19 ---\n"
+        "[09:00:00] 小美: 早安呀！\n"
+        "[09:01:00] 我: 今天天氣真好"
+    )
+    assert formatted == expected
+
+
+def test_format_chat_messages_empty_and_no_time():
+    assert format_chat_messages([]) == ""
+
+    # 無時間或日期格式
+    messages = [
+        {"sender": "me", "content": "無時間訊息", "sent_at": None},
+        {"sender": "them", "content": "收到", "sent_at": ""},
+    ]
+    formatted = format_chat_messages(messages, other_label="對方")
+    assert formatted == "我: 無時間訊息\n對方: 收到"

@@ -42,7 +42,8 @@ from app.core.config import settings
 from app.core.error_logger import log_error
 from app.clients.gemini import GeminiClient
 from app.storage.chroma_store import ChromaStore
-from app.utils import parse_time_str, cosine_similarity, clean_message_text
+from app.utils import parse_time_str, cosine_similarity, clean_message_text, format_chat_messages
+
 from app.storage.db import (
     get_active_contact,
     get_messages,
@@ -223,8 +224,9 @@ class IngestionPipeline:
             batches = self.extractor.slice_dialogue_batches(sorted_msgs)
             chunks = []
             for b_idx, batch in enumerate(batches):
-                lines = [f"[{m['sent_at']}] {'我' if m['sender'] == 'me' else '對方'}: {m['content']}" for m in batch]
-                events = self.llm_client.extract_events("\n".join(lines))
+                batch_text = format_chat_messages(batch, other_label="對方")
+                events = self.llm_client.extract_events(batch_text)
+
                 for e_idx, ev in enumerate(events):
                     chunks.append({
                         "id": f"event_{b_idx}_{e_idx}",
@@ -386,21 +388,12 @@ class IngestionPipeline:
             sections.append("【過往重要事件記憶（Consolidated Events）】:\n" + "\n".join(ev_lines))
 
             if recent_msgs:
-                msg_lines = []
-                for m in recent_msgs:
-                    sender_label = "我" if m["sender"] == "me" else "對方"
-                    time_prefix = f"[{m['sent_at']}] " if m["sent_at"] else ""
-                    msg_lines.append(f"{time_prefix}{sender_label}: {m['content']}")
-                sections.append("【最近 20 則最新互動紀錄（即時氛圍與溫度）】:\n" + "\n".join(msg_lines))
+                recent_formatted = format_chat_messages(recent_msgs, other_label="對方")
+                sections.append(f"【最近 {len(recent_msgs)} 則最新互動紀錄（即時氛圍與溫度）】:\n{recent_formatted}")
 
             payload_text = "\n\n".join(sections)
         elif recent_msgs:
-            formatted_lines = []
-            for m in recent_msgs:
-                sender_label = "我" if m["sender"] == "me" else "對方"
-                time_prefix = f"[{m['sent_at']}] " if m["sent_at"] else ""
-                formatted_lines.append(f"{time_prefix}{sender_label}: {m['content']}")
-            payload_text = "\n".join(formatted_lines)
+            payload_text = format_chat_messages(recent_msgs, other_label="對方")
         else:
             return None
 
@@ -702,7 +695,7 @@ class IngestionPipeline:
             except Exception:
                 pass
 
-        all_text = "\n".join([f"[{m['sent_at']}] {'我' if m['sender']=='me' else '對方'}: {m['content']}" for m in all_msgs])
+        all_text = format_chat_messages(all_msgs, other_label="對方")
         if self.llm_client and hasattr(self.llm_client, "generate_full_history_summary"):
             full_summary = self.llm_client.generate_full_history_summary(all_text)
         else:
