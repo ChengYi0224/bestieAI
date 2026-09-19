@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2026-09-20
+
+### Added — FastAPI REST API 層支援 Sonara Mobile App
+
+- **FastAPI 應用程式與單一啟動入口 (`app/api/`, `main.py`)**：
+  - 將 `main.py` 整合為 Typer CLI 統一入口，預設同時並行啟動 Bot 與 API Server，並提供 `bot` 與 `api` 子命令支援獨立啟動。
+  - 於 `app/api/app.py` 建立 `create_app` 應用程式工廠，支援 CORS 跨來源中介層。
+- **JWT 認證機制與依賴注入 (`app/api/dependencies.py`, `app/services/auth_api_service.py`)**：
+  - 實作 JWT Bearer Token 簽發與驗證機制（支援自訂 `API_SECRET` 與 Token 有效期）。
+  - 提供 Repository 與 API Service 的 FastAPI `Depends()` 工廠注入。
+- **REST API 端點實作 (`app/api/routers/`)**：
+  - `POST /auth/token`：登入並取得 JWT Bearer Token。
+  - `GET /status`：取得系統健康度與 Bot Worker 狀態。
+  - `GET /contacts`：取得聯絡人清單（支援狀態篩選）。
+  - `GET /contacts/{id}`：取得單一聯絡人詳情。
+  - `PATCH /contacts/{id}`：更新聯絡人暱稱與關係筆記。
+  - `GET /contacts/{id}/messages`：分頁查詢歷史對話紀錄，並回傳 `X-Total-Count` 標頭。
+  - `GET /contacts/{id}/events`：查詢指定聯絡人的記憶事件清單。
+- **資料存取層擴充 (`app/storage/repositories/`)**：
+  - `ContactRepository` 新增 `update_details` 方法並使 `list_all` 支援狀態篩選。
+  - `MessageRepository` 新增 `get_paginated` 與 `count_by_contact` 分頁輔助方法。
+- **Pydantic Schema 與 API 專用 Service**：
+  - 於 `app/api/schemas/` 實作標準 Request / Response Schema。
+  - 於 `app/services/` 實作 `AuthApiService`, `StatusApiService`, `ContactApiService`, `MessageApiService`，嚴格遵守業務邏輯與 SQL 分離規範。
+- **單元測試覆蓋**：
+  - 新增 `tests/unit/test_api_auth.py`, `tests/unit/test_api_status.py`, `tests/unit/test_api_contacts.py`, `tests/unit/test_api_messages.py`，全量測試通過。
+
 ## [0.10.0] - 2026-09-20
 
 ### Changed — track 首次追蹤預設抓取量提升至 1000 則並支援自訂傳參

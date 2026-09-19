@@ -77,3 +77,27 @@ class MessageRepository(BaseRepository):
             (contact_id, limit)
         )
         return {str(row["ig_item_id"]) for row in cursor.fetchall() if row["ig_item_id"]}
+
+    @with_connection(readonly=True)
+    def get_paginated(
+        self,
+        conn: sqlite3.Connection,
+        contact_id: int,
+        limit: int = 50,
+        offset: int = 0
+    ) -> List[sqlite3.Row]:
+        """分頁取得指定聯絡人的歷史私訊，預設依發送時間昇冪排序。"""
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM messages WHERE contact_id = ? ORDER BY sent_at ASC LIMIT ? OFFSET ?",
+            (contact_id, limit, offset)
+        )
+        return cursor.fetchall()
+
+    @with_connection(readonly=True)
+    def count_by_contact(self, conn: sqlite3.Connection, contact_id: int) -> int:
+        """計算指定聯絡人的歷史私訊總數。"""
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM messages WHERE contact_id = ?", (contact_id,))
+        row = cursor.fetchone()
+        return row[0] if row else 0

@@ -145,10 +145,47 @@ class ContactRepository(BaseRepository):
         return cursor.fetchall()
 
     @with_connection(readonly=True)
-    def list_all(self, conn: sqlite3.Connection) -> List[sqlite3.Row]:
+    def list_all(self, conn: sqlite3.Connection, status: Optional[str] = None) -> List[sqlite3.Row]:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM contacts ORDER BY id DESC")
+        if status:
+            cursor.execute("SELECT * FROM contacts WHERE status = ? ORDER BY id DESC", (status,))
+        else:
+            cursor.execute("SELECT * FROM contacts ORDER BY id DESC")
         return cursor.fetchall()
+
+    @with_connection(readonly=False)
+    def update_details(
+        self,
+        conn: sqlite3.Connection,
+        contact_id: int,
+        nickname: Optional[str] = None,
+        relationship_note: Optional[str] = None,
+        update_nickname: bool = False,
+        update_note: bool = False,
+    ) -> Optional[sqlite3.Row]:
+        """更新指定聯絡人之暱稱與關係備註，並回傳更新後的資料。"""
+        updates = []
+        params = []
+        if update_nickname:
+            clean_nick = nickname.strip() if (nickname and nickname.strip()) else None
+            updates.append("nickname = ?")
+            params.append(clean_nick)
+        if update_note:
+            clean_note = relationship_note.strip() if (relationship_note and relationship_note.strip()) else None
+            updates.append("relationship_note = ?")
+            params.append(clean_note)
+
+        if updates:
+            params.append(contact_id)
+            query = f"UPDATE contacts SET {', '.join(updates)} WHERE id = ?"
+            cursor = conn.cursor()
+            cursor.execute(query, tuple(params))
+            if cursor.rowcount == 0:
+                return None
+
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM contacts WHERE id = ?", (contact_id,))
+        return cursor.fetchone()
 
     @with_connection(readonly=True)
     def get_tracked_contacts(self, conn: sqlite3.Connection) -> List[sqlite3.Row]:

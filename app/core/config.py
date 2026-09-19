@@ -153,5 +153,19 @@ class Settings(BaseSettings):
     def event_extraction_models_list(self) -> list[str]:
         return [m.strip() for m in self.GEMINI_EVENT_EXTRACTION_MODELS.split(",") if m.strip()]
 
+    # ==================== FastAPI REST API 設定 ====================
+    # API 認證金鑰
+    API_SECRET: str = Field(default="your-secure-secret-key-here")
+
+    # JWT Token 有效時數
+    API_TOKEN_EXPIRE_HOURS: int = Field(default=24)
+
+    # CORS 允許來源（逗號分隔字串）
+    CORS_ORIGINS: str = Field(default="http://localhost,http://10.0.2.2")
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
 
 settings = Settings()
