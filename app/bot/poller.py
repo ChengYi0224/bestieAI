@@ -315,15 +315,17 @@ class BotPoller:
 
         if action == "TRACK_REQUEST":
             target = result.data.get("target", "")
-            self.bot_ig.send_message(thread_id, f"開始抓取與 {target} 的歷史訊息...")
+            amount = result.data.get("amount", settings.TRACK_DEFAULT_LIMIT)
+            self.bot_ig.send_message(thread_id, f"開始抓取與 {target} 的歷史訊息（上限 {amount} 則）...")
             try:
                 if self.main_ig is None:
                     main_client = self.session_manager.login("main")
                     self.main_ig = IGClient(main_client)
                 adapter = SourceAdapterFactory.create("instagram", ig_client=self.main_ig)
-                info = self.ingestion.run_ingestion(adapter, target)
+                info = self.ingestion.run_ingestion(adapter, target, amount=amount)
                 set_active_contact(target)
                 reply_text = f"已追蹤 {target}，匯入 {info['inserted_messages']} 則訊息，關係摘要卡已建立。"
+
             except Exception as ex:
                 logger.error(f"Ingestion 失敗: {ex}")
                 log_error(ex, context=f"BotPoller.TRACK_REQUEST — {target}", logger_name="bestieAI.bot_poller")

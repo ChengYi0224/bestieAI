@@ -41,14 +41,15 @@ class ContactHandler:
         if not cmd.target:
             return CommandResult(
                 success=False,
-                message="格式錯誤！請提供要追蹤的帳號：track <IG_ID>\n（輸入 help 可查看常用指令）"
+                message="格式錯誤！請提供要追蹤的帳號：track <IG_ID> [數量]\n（輸入 help 可查看常用指令）"
             )
         return CommandResult(
             success=True,
-            message=f"開始追蹤 {cmd.target}...",
+            message=f"開始追蹤 {cmd.target}（抓取 {cmd.amount} 則訊息）...",
             action_type="TRACK_REQUEST",
-            data={"target": cmd.target}
+            data={"target": cmd.target, "amount": cmd.amount}
         )
+
 
     def handle_track_full(self, cmd: TrackFullCommand) -> CommandResult:
         if not cmd.target:

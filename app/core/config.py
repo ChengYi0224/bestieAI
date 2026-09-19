@@ -112,8 +112,12 @@ class Settings(BaseSettings):
     CROSS_RAG_RESULTS: int = Field(default=3)
 
     # ==================== 抓取、切塊與摘要更新門檻 ====================
+    # track 首次追蹤快速匯入時的預設訊息則數（至少 1000 則）
+    TRACK_DEFAULT_LIMIT: int = Field(default=1000)
+
     # track_full 安全慢速全量抓取時的預設最大歷史訊息則數
     TRACK_FULL_DEFAULT_LIMIT: int = Field(default=5000)
+
 
     # 事件萃取時，單一批次提煉的訊息筆數（每批提煉為 2~4 條關鍵事件摘要）
     EVENT_EXTRACTION_BATCH_SIZE: int = Field(default=800)

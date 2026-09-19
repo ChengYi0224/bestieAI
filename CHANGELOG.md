@@ -5,7 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-09-20
+
+### Changed — track 首次追蹤預設抓取量提升至 1000 則並支援自訂傳參
+
+- **track 首次追蹤抓取量提升至 1000 則**：
+  - 於 `app/core/config.py` 新增 `TRACK_DEFAULT_LIMIT` 配置項，預設值由 100 則調升至 1000 則。
+  - `IngestionPipeline.run_ingestion` 預設訊息量對齊 `settings.TRACK_DEFAULT_LIMIT`。
+- **支援自訂抓取數量傳參**：
+  - `TrackCommand` 與 `_TrackParser` 擴充支援 `track <IG_ID> [數量]`（亦相容 `track [數量] <IG_ID>`）。
+  - `ContactHandler.handle_track` 與 `BotPoller.TRACK_REQUEST` 傳遞 `amount` 參數進行指定數量抓取。
+- **指令說明更新**：
+  - `HelpHandler` 更新 `track` 指令說明，清楚標示可選 `[數量]` 與預設 1000 則訊息。
+- **單元測試覆蓋**：
+  - `tests/unit/test_command_bus.py` 新增 `TrackCommand` 預設 1000 則與自訂數量的指令解析與派發測試，全量測試通過。
+
 ## [0.9.0] - 2026-09-19
+
 
 ### Changed — 對話輸出日期分區、資料存取層模組化與 Handler DI 注入
 

@@ -51,9 +51,12 @@ def test_command_bus_dispatch_track(test_env):
     assert isinstance(result, CommandResult)
     assert result.success is True
     assert result.action_type == "TRACK_REQUEST"
-    assert result.data == {"target": "test_account"}
+    assert result.data["target"] == "test_account"
+    assert result.data["amount"] == 1000
     # message 應為人類可讀文字，不再包含魔法前綴
     assert "test_account" in result.message
+    assert "1000" in result.message
+
 
 
 def test_command_bus_dispatch_select(test_env):
@@ -105,8 +108,18 @@ def test_router_parse_text_to_command(test_env):
     cmd_track = router.parse_text_to_command("track alice_123")
     assert isinstance(cmd_track, TrackCommand)
     assert cmd_track.target == "alice_123"
+    assert cmd_track.amount == 1000
+
+    cmd_track_amt = router.parse_text_to_command("track alice_123 1500")
+    assert cmd_track_amt.target == "alice_123"
+    assert cmd_track_amt.amount == 1500
+
+    cmd_track_rev = router.parse_text_to_command("track 2000 bob_456")
+    assert cmd_track_rev.target == "bob_456"
+    assert cmd_track_rev.amount == 2000
 
     cmd_tf = router.parse_text_to_command("tf alice_123 500")
+
     assert isinstance(cmd_tf, TrackFullCommand)
     assert cmd_tf.target == "alice_123"
     assert cmd_tf.max_amount == 500
@@ -126,7 +139,8 @@ def test_router_structured_message(test_env):
     res = router.handle_message_structured("t david_456")
     assert isinstance(res, CommandResult)
     assert res.success is True
-    assert res.data == {"target": "david_456"}
+    assert res.data == {"target": "david_456", "amount": 1000}
+
     assert res.to_dict()["action_type"] == "TRACK_REQUEST"
 
 

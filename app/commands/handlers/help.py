@@ -13,7 +13,7 @@ class HelpHandler:
         if not cmd.show_all:
             msg = (
                 "【IG AI 陪聊機器人 指令清單】\n"
-                "• track (t) <IG_ID>：首次追蹤對象並匯入近況\n"
+                f"• track (t) <IG_ID> [數量]：首次追蹤對象並匯入近況（預設 {settings.TRACK_DEFAULT_LIMIT} 則）\n"
                 "• select (s) <關鍵字>：切換目前討論對象\n"
                 "• card (c) [IG_ID]：檢視日常摘要卡（加 full 查長文）\n"
                 "• me (m) <內容>：讓 AI 記住你的喜好與生活近況\n"
@@ -37,7 +37,8 @@ class HelpHandler:
                 "💡 提示：上述指令亦可在末尾加上 [IG_ID] 直接指定對象，如 card alex。\n\n"
                 "--- 獨立指令（全域管理，不需搭配 select）---\n"
                 "• select (s) <關鍵字>：切換目前討論的作用中對象\n"
-                "• track (t) <IG_ID>：首次追蹤新對象並匯入近期對話\n"
+                f"• track (t) <IG_ID> [數量]：首次追蹤新對象並匯入近期對話（預設 {settings.TRACK_DEFAULT_LIMIT} 則）\n"
+
                 "• list (ls/l)：列出所有已追蹤對象名單\n"
                 "• status (st/q)：檢視目前選定對象與背景爬蟲進度\n"
                 "• me (m) <內容>：記錄關於你的個人生活近況、習慣或喜好\n"

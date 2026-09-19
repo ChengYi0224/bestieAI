@@ -103,7 +103,19 @@ class _TrackParser(CommandParser):
     def aliases(self): return ("track", "t")
 
     def parse(self, parts, db_path=None):
-        return TrackCommand(target=parts[1] if len(parts) >= 2 else "")
+        target = ""
+        amount = settings.TRACK_DEFAULT_LIMIT
+        if len(parts) >= 2:
+            if parts[1].isdigit():
+                amount = int(parts[1])
+                if len(parts) >= 3:
+                    target = parts[2]
+            else:
+                target = parts[1]
+                if len(parts) >= 3 and parts[2].isdigit():
+                    amount = int(parts[2])
+        return TrackCommand(target=target, amount=amount)
+
 
 
 class _TrackFullParser(CommandParser):

@@ -19,6 +19,8 @@ class HelpCommand(BaseCommand):
 @dataclass
 class TrackCommand(BaseCommand):
     target: str
+    amount: int = settings.TRACK_DEFAULT_LIMIT
+
 
 @dataclass
 class TrackFullCommand(BaseCommand):

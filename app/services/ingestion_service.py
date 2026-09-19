@@ -601,12 +601,13 @@ class IngestionPipeline:
         self,
         source: Any = None,
         target_username: str = "",
-        amount: int = 100,
+        amount: int = settings.TRACK_DEFAULT_LIMIT,
         progress_callback: Optional[Any] = None,
         db_path: Optional[Any] = None,
         ig_client: Any = None,
     ) -> Dict[str, Any]:
-        """首次追蹤快速匯入近期訊息（預設 100 則）。"""
+        """首次追蹤快速匯入近期訊息（預設至少 1000 則）。"""
+
         actual_source = source if source is not None else ig_client
         res = self.run_full_ingestion(
             source=actual_source,
