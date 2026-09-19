@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0] - 2026-09-20
+
+### Added — 雙軌身分認證（Google OAuth + 原生帳密）與多用戶 ChromaDB 向量隔離
+
+- **多使用者帳號體系 (`users` 資料表與 `UserRepository`)**：
+  - 新增 `users` 資料表，記錄 `id`, `username`, `email`, `password_hash`, `google_sub`, `display_name`, `avatar_url`, `status`。
+  - 於 `db.py` 實作自動平滑遷移，為 `contacts` 補足 `user_id INTEGER DEFAULT 1` 外鍵，並初始化 `user_id = 1` 預設管理者。
+  - 新增 `UserRepository`，提供使用者建立、查詢、密碼更新與 `google_sub` 帳號綁定方法。
+- **雙軌認證服務 (`AuthApiService`)**：
+  - 原生註冊與登入：使用 `bcrypt` 進行加鹽雜湊與驗證，支援使用者名稱或信箱登入。
+  - Google OAuth 2.0 登入：接收 Google ID Token 進行簽章與 Audience 多端白名單驗證。
+  - 管理者自動綁定：登入信箱符合 `ADMIN_EMAIL` 時自動綁定至 `user_id = 1`，確保管理者能無縫存取所有歷史資料；新使用者則自動配發獨立 `user_id`。
+  - JWT Payload 更新為 `sub=str(user_id)`，並提供 `/auth/me` 個人資訊查詢端點。
+- **租戶資料與 ChromaDB 向量隔離**：
+  - `ContactRepository` 與 `ContactApiService` 全面支援 `user_id` 作用域過濾。
+  - `ChromaStore` 支援 `user_id` 分區 Collection 命名（`{collection}_{user_id}`）與 Metadata 標籤過濾。
+- **單元測試覆蓋**：
+  - 新增 `tests/unit/test_user_repository.py` 與 `tests/unit/test_chroma_isolation.py`。
+  - 重構 `tests/unit/test_api_auth.py` 覆蓋雙軌註冊登入、管理者綁定與 Token 有效性，全量測試 129 筆全數通過。
+
 ## [0.11.0] - 2026-09-20
 
 ### Added — FastAPI REST API 層支援 Sonara Mobile App

@@ -12,31 +12,47 @@ class ContactRepository(BaseRepository):
     """聯絡人與人物設定資料存取庫。"""
 
     @with_connection(readonly=True)
-    def get_by_id(self, conn: sqlite3.Connection, contact_id: int) -> Optional[sqlite3.Row]:
+    def get_by_id(self, conn: sqlite3.Connection, contact_id: int, user_id: Optional[int] = None) -> Optional[sqlite3.Row]:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM contacts WHERE id = ?", (contact_id,))
+        if user_id is not None:
+            cursor.execute("SELECT * FROM contacts WHERE id = ? AND user_id = ?", (contact_id, user_id))
+        else:
+            cursor.execute("SELECT * FROM contacts WHERE id = ?", (contact_id,))
         return cursor.fetchone()
 
     @with_connection(readonly=True)
-    def get_by_username(self, conn: sqlite3.Connection, ig_account_id: str) -> Optional[sqlite3.Row]:
+    def get_by_username(self, conn: sqlite3.Connection, ig_account_id: str, user_id: Optional[int] = None) -> Optional[sqlite3.Row]:
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM contacts WHERE ig_account_id = ?", (ig_account_id,))
+        if user_id is not None:
+            cursor.execute("SELECT * FROM contacts WHERE ig_account_id = ? AND user_id = ?", (ig_account_id, user_id))
+        else:
+            cursor.execute("SELECT * FROM contacts WHERE ig_account_id = ?", (ig_account_id,))
         return cursor.fetchone()
 
     @with_connection(readonly=True)
-    def find_by_identifier(self, conn: sqlite3.Connection, identifier: str) -> Optional[sqlite3.Row]:
+    def find_by_identifier(self, conn: sqlite3.Connection, identifier: str, user_id: Optional[int] = None) -> Optional[sqlite3.Row]:
         """依 IG 帳號、顯示名稱或暱稱不分大小寫精確匹配單一聯絡人。"""
         if not identifier or not identifier.strip():
             return None
         clean_id = identifier.strip()
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT * FROM contacts
-            WHERE LOWER(ig_account_id) = LOWER(?)
-               OR LOWER(display_name) = LOWER(?)
-               OR LOWER(nickname) = LOWER(?)
-            LIMIT 1
-        """, (clean_id, clean_id, clean_id))
+        if user_id is not None:
+            cursor.execute("""
+                SELECT * FROM contacts
+                WHERE (LOWER(ig_account_id) = LOWER(?)
+                   OR LOWER(display_name) = LOWER(?)
+                   OR LOWER(nickname) = LOWER(?))
+                   AND user_id = ?
+                LIMIT 1
+            """, (clean_id, clean_id, clean_id, user_id))
+        else:
+            cursor.execute("""
+                SELECT * FROM contacts
+                WHERE LOWER(ig_account_id) = LOWER(?)
+                   OR LOWER(display_name) = LOWER(?)
+                   OR LOWER(nickname) = LOWER(?)
+                LIMIT 1
+            """, (clean_id, clean_id, clean_id))
         return cursor.fetchone()
 
     @with_connection(readonly=True)
@@ -78,17 +94,17 @@ class ContactRepository(BaseRepository):
         return False
 
     @with_connection(readonly=False)
-    def get_or_create(self, conn: sqlite3.Connection, ig_account_id: str, display_name: Optional[str] = None) -> int:
+    def get_or_create(self, conn: sqlite3.Connection, ig_account_id: str, display_name: Optional[str] = None, user_id: int = 1) -> int:
         cursor = conn.cursor()
-        cursor.execute("SELECT id FROM contacts WHERE ig_account_id = ?", (ig_account_id,))
+        cursor.execute("SELECT id FROM contacts WHERE ig_account_id = ? AND user_id = ?", (ig_account_id, user_id))
         row = cursor.fetchone()
         if row:
             return row["id"]
         name = display_name or ig_account_id
         cursor.execute("""
-            INSERT INTO contacts (ig_account_id, display_name, status)
-            VALUES (?, ?, 'tracked')
-        """, (ig_account_id, name))
+            INSERT INTO contacts (user_id, ig_account_id, display_name, status)
+            VALUES (?, ?, ?, 'tracked')
+        """, (user_id, ig_account_id, name))
         return cursor.lastrowid
 
     @with_connection(readonly=True)
@@ -145,12 +161,23 @@ class ContactRepository(BaseRepository):
         return cursor.fetchall()
 
     @with_connection(readonly=True)
-    def list_all(self, conn: sqlite3.Connection, status: Optional[str] = None) -> List[sqlite3.Row]:
+    def list_all(
+        self,
+        conn: sqlite3.Connection,
+        status: Optional[str] = None,
+        user_id: Optional[int] = None,
+    ) -> List[sqlite3.Row]:
         cursor = conn.cursor()
+        conditions = []
+        params = []
+        if user_id is not None:
+            conditions.append("user_id = ?")
+            params.append(user_id)
         if status:
-            cursor.execute("SELECT * FROM contacts WHERE status = ? ORDER BY id DESC", (status,))
-        else:
-            cursor.execute("SELECT * FROM contacts ORDER BY id DESC")
+            conditions.append("status = ?")
+            params.append(status)
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        cursor.execute(f"SELECT * FROM contacts {where_clause} ORDER BY id DESC", tuple(params))
         return cursor.fetchall()
 
     @with_connection(readonly=False)
@@ -162,6 +189,7 @@ class ContactRepository(BaseRepository):
         relationship_note: Optional[str] = None,
         update_nickname: bool = False,
         update_note: bool = False,
+        user_id: Optional[int] = None,
     ) -> Optional[sqlite3.Row]:
         """更新指定聯絡人之暱稱與關係備註，並回傳更新後的資料。"""
         updates = []
@@ -175,27 +203,38 @@ class ContactRepository(BaseRepository):
             updates.append("relationship_note = ?")
             params.append(clean_note)
 
+        where_clauses = ["id = ?"]
+        where_params = [contact_id]
+        if user_id is not None:
+            where_clauses.append("user_id = ?")
+            where_params.append(user_id)
+
         if updates:
-            params.append(contact_id)
-            query = f"UPDATE contacts SET {', '.join(updates)} WHERE id = ?"
+            query = f"UPDATE contacts SET {', '.join(updates)} WHERE {' AND '.join(where_clauses)}"
             cursor = conn.cursor()
-            cursor.execute(query, tuple(params))
+            cursor.execute(query, tuple(params + where_params))
             if cursor.rowcount == 0:
                 return None
 
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM contacts WHERE id = ?", (contact_id,))
+        cursor.execute(f"SELECT * FROM contacts WHERE {' AND '.join(where_clauses)}", tuple(where_params))
         return cursor.fetchone()
 
     @with_connection(readonly=True)
-    def get_tracked_contacts(self, conn: sqlite3.Connection) -> List[sqlite3.Row]:
+    def get_tracked_contacts(self, conn: sqlite3.Connection, user_id: Optional[int] = None) -> List[sqlite3.Row]:
         """取得所有追蹤中（status = 'tracked'）的聯絡人。"""
         cursor = conn.cursor()
-        cursor.execute("SELECT id, ig_account_id, display_name FROM contacts WHERE status = 'tracked'")
+        if user_id is not None:
+            cursor.execute("SELECT id, ig_account_id, display_name FROM contacts WHERE status = 'tracked' AND user_id = ?", (user_id,))
+        else:
+            cursor.execute("SELECT id, ig_account_id, display_name FROM contacts WHERE status = 'tracked'")
         return cursor.fetchall()
 
     @with_connection(readonly=False)
-    def untrack(self, conn: sqlite3.Connection, ig_account_id: str) -> bool:
+    def untrack(self, conn: sqlite3.Connection, ig_account_id: str, user_id: Optional[int] = None) -> bool:
         cursor = conn.cursor()
-        cursor.execute("UPDATE contacts SET status = 'untracked' WHERE ig_account_id = ?", (ig_account_id,))
+        if user_id is not None:
+            cursor.execute("UPDATE contacts SET status = 'untracked' WHERE ig_account_id = ? AND user_id = ?", (ig_account_id, user_id))
+        else:
+            cursor.execute("UPDATE contacts SET status = 'untracked' WHERE ig_account_id = ?", (ig_account_id,))
         return cursor.rowcount > 0

@@ -1,4 +1,5 @@
 """messages.py — 歷史私訊 API 路由模組。"""
+from typing import Dict, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from app.api.dependencies import get_current_user, get_message_service
 from app.api.schemas.common import ErrorResponse
@@ -19,11 +20,16 @@ async def get_contact_messages(
     response: Response,
     limit: int = Query(default=50, ge=1, le=200, description="單頁筆數"),
     offset: int = Query(default=0, ge=0, description="位移筆數"),
-    current_user: str = Depends(get_current_user),
+    current_user: Dict[str, Any] = Depends(get_current_user),
     message_service: MessageApiService = Depends(get_message_service),
 ) -> list[MessageResponse]:
     """分頁查詢指定聯絡人的歷史私訊紀錄，並在 Header 附加總筆數。"""
-    result = message_service.get_contact_messages(contact_id, limit=limit, offset=offset)
+    result = message_service.get_contact_messages(
+        contact_id,
+        limit=limit,
+        offset=offset,
+        user_id=current_user["id"],
+    )
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

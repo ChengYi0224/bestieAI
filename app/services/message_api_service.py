@@ -24,12 +24,13 @@ class MessageApiService:
         contact_id: int,
         limit: int = 50,
         offset: int = 0,
+        user_id: Optional[int] = None,
     ) -> Optional[tuple[int, list[sqlite3.Row]]]:
         """
         取得指定聯絡人訊息清單（分頁）與總筆數。
-        若聯絡人不存在回傳 None。
+        若聯絡人不存在或不屬於該使用者則回傳 None。
         """
-        contact = self.contact_repo.get_by_id(contact_id)
+        contact = self.contact_repo.get_by_id(contact_id, user_id=user_id)
         if not contact:
             return None
 
@@ -41,12 +42,13 @@ class MessageApiService:
         self,
         contact_id: int,
         status: Optional[str] = None,
+        user_id: Optional[int] = None,
     ) -> Optional[list[sqlite3.Row]]:
         """
         取得指定聯絡人之記憶事件清單。
-        若聯絡人不存在回傳 None。
+        若聯絡人不存在或不屬於該使用者則回傳 None。
         """
-        contact = self.contact_repo.get_by_id(contact_id)
+        contact = self.contact_repo.get_by_id(contact_id, user_id=user_id)
         if not contact:
             return None
 

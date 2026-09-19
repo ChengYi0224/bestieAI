@@ -13,6 +13,7 @@ from app.storage.repositories.contacts import ContactRepository
 from app.storage.repositories.messages import MessageRepository
 from app.storage.repositories.bot_state import BotStateRepository
 from app.storage.repositories.events import EventRepository
+from app.storage.repositories.users import UserRepository
 
 __all__ = [
     "BaseRepository",
@@ -21,4 +22,5 @@ __all__ = [
     "MessageRepository",
     "BotStateRepository",
     "EventRepository",
+    "UserRepository",
 ]

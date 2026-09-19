@@ -25,14 +25,20 @@ class ChromaStore:
         self,
         chroma_path: Optional[Path] = None,
         collection_name: str = "chat_chunks",
-        gemini_client: Optional[GeminiClient] = None
+        gemini_client: Optional[GeminiClient] = None,
+        user_id: Optional[int] = None,
     ):
         path = chroma_path or settings.CHROMA_PATH
         path.mkdir(parents=True, exist_ok=True)
-        self.collection_name = collection_name
+        self.user_id = user_id
+        if user_id is not None and user_id != 1:
+            effective_name = f"{collection_name}_{user_id}"
+        else:
+            effective_name = collection_name
+        self.collection_name = effective_name
         self.client = chromadb.PersistentClient(path=str(path))
         self.collection = self.client.get_or_create_collection(
-            name=collection_name,
+            name=effective_name,
             metadata={"hnsw:space": "cosine"}
         )
         self.gemini_client = gemini_client or GeminiClient()
@@ -78,6 +84,8 @@ class ChromaStore:
                 "start_time": str(c.get("start_time") or ""),
                 "end_time": str(c.get("end_time") or ""),
             }
+            if self.user_id is not None:
+                meta["user_id"] = int(self.user_id)
             metadatas.append(meta)
 
         self.collection.add(
@@ -92,11 +100,14 @@ class ChromaStore:
         """寫入使用者自身事實記憶。"""
         embeddings = self.get_embeddings_batch([text])
         chunk_id = f"self_{uuid.uuid4().hex[:8]}"
+        meta = {"type": "self_memory", "created_at": datetime.now().isoformat()}
+        if self.user_id is not None:
+            meta["user_id"] = int(self.user_id)
         self.collection.add(
             ids=[chunk_id],
             embeddings=embeddings,
             documents=[text],
-            metadatas=[{"type": "self_memory", "created_at": datetime.now().isoformat()}]
+            metadatas=[meta]
         )
         return chunk_id
 
@@ -117,16 +128,20 @@ class ChromaStore:
             query_embedding: 預先計算的 query 向量（共享用）。
             contact_id: 若提供，自動加入 contact_id 過濾（與 where 合併為 $and）。
         """
-        # 建立完整 where 條件
-        contact_filter: Optional[Dict[str, Any]] = (
-            {"contact_id": int(contact_id)} if contact_id is not None else None
-        )
-        if contact_filter and where:
-            effective_where: Optional[Dict[str, Any]] = {"$and": [contact_filter, where]}
-        elif contact_filter:
-            effective_where = contact_filter
+        filters: List[Dict[str, Any]] = []
+        if contact_id is not None:
+            filters.append({"contact_id": int(contact_id)})
+        if self.user_id is not None:
+            filters.append({"user_id": int(self.user_id)})
+        if where:
+            filters.append(where)
+
+        if len(filters) == 1:
+            effective_where = filters[0]
+        elif len(filters) > 1:
+            effective_where = {"$and": filters}
         else:
-            effective_where = where
+            effective_where = None
 
         if query_embedding is None:
             embeddings = self.get_embeddings_batch([query_text])

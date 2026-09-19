@@ -14,7 +14,7 @@ def create_app() -> FastAPI:
     """建構並配置 FastAPI 應用程式實例。"""
     application = FastAPI(
         title="bestieAI REST API",
-        version="0.11.0",
+        version="0.12.0",
         description="Sonara 產品專用 bestieAI 後端 REST API 介面。",
     )
 

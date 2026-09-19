@@ -22,6 +22,20 @@ def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
 def init_db(db_path: Optional[Path] = None) -> None:
     conn = get_connection(db_path)
     with conn:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            email TEXT UNIQUE,
+            password_hash TEXT,
+            google_sub TEXT UNIQUE,
+            display_name TEXT,
+            avatar_url TEXT,
+            status TEXT DEFAULT 'active',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+
         # 平滑遷移：為現有資料表補足新欄位
         migrations = [
             ("bot_state", "pending_selection TEXT"),
@@ -29,6 +43,7 @@ def init_db(db_path: Optional[Path] = None) -> None:
             ("contacts", "nickname TEXT"),
             ("contacts", "full_history_summary TEXT"),
             ("contacts", "full_history_updated_at DATETIME"),
+            ("contacts", "user_id INTEGER DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE"),
         ]
         for table, col_def in migrations:
             try:
@@ -39,6 +54,7 @@ def init_db(db_path: Optional[Path] = None) -> None:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS contacts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE,
             ig_account_id TEXT UNIQUE NOT NULL,
             display_name TEXT,
             nickname TEXT,
@@ -94,6 +110,23 @@ def init_db(db_path: Optional[Path] = None) -> None:
         INSERT OR IGNORE INTO bot_state (id, active_contact_id, pending_selection, worker_status, updated_at)
         VALUES (1, NULL, NULL, NULL, CURRENT_TIMESTAMP);
         """)
+
+        # 確保預設管理者 (user_id = 1) 存在，承接所有既有聯絡人資料
+        admin_username = settings.MAIN_ACCOUNT_USERNAME.strip() if settings.MAIN_ACCOUNT_USERNAME else "admin"
+        admin_email = settings.ADMIN_EMAIL.strip() if settings.ADMIN_EMAIL else None
+        conn.execute("""
+            INSERT OR IGNORE INTO users (id, username, email, display_name, status)
+            VALUES (1, ?, ?, 'Admin', 'active')
+        """, (admin_username, admin_email))
+
+        if admin_email:
+            conn.execute(
+                "UPDATE users SET email = ? WHERE id = 1 AND (email IS NULL OR email = '')",
+                (admin_email,)
+            )
+
+        # 補正既有 contacts 的 user_id 為 1
+        conn.execute("UPDATE contacts SET user_id = 1 WHERE user_id IS NULL;")
     conn.close()
 
 

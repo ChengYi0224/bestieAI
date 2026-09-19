@@ -163,6 +163,20 @@ class Settings(BaseSettings):
     # CORS 允許來源（逗號分隔字串）
     CORS_ORIGINS: str = Field(default="http://localhost,http://10.0.2.2")
 
+    # Google OAuth 2.0 Client IDs
+    GOOGLE_CLIENT_ID_WEB: str = Field(default="")
+    GOOGLE_CLIENT_ID_ANDROID: str = Field(default="")
+    GOOGLE_CLIENT_ID_IOS: str = Field(default="")
+
+    # 預設管理者 Google Email（登入時自動綁定至 user_id = 1）
+    ADMIN_EMAIL: str = Field(default="")
+
+    @property
+    def google_client_ids_list(self) -> list[str]:
+        """彙整所有設定之 Google Client ID 供 Token 驗證比對。"""
+        ids = [self.GOOGLE_CLIENT_ID_WEB, self.GOOGLE_CLIENT_ID_ANDROID, self.GOOGLE_CLIENT_ID_IOS]
+        return [client_id.strip() for client_id in ids if client_id and client_id.strip()]
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]

@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Dict, Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi import status as http_status
 from app.api.dependencies import (
@@ -22,11 +22,11 @@ router = APIRouter(prefix="/contacts", tags=["Contacts"])
 )
 async def list_contacts(
     status: Optional[str] = None,
-    current_user: str = Depends(get_current_user),
+    current_user: Dict[str, Any] = Depends(get_current_user),
     contact_service: ContactApiService = Depends(get_contact_service),
 ) -> list[ContactResponse]:
-    """取得聯絡人清單，支援狀態篩選（如 tracked/untracked）。"""
-    rows = contact_service.list_contacts(status=status)
+    """取得聯絡人清單，支援狀態篩選（如 tracked/untracked）與使用者資料隔離。"""
+    rows = contact_service.list_contacts(status=status, user_id=current_user["id"])
     return [ContactResponse.model_validate(dict(row)) for row in rows]
 
 
@@ -38,11 +38,11 @@ async def list_contacts(
 )
 async def get_contact(
     contact_id: int,
-    current_user: str = Depends(get_current_user),
+    current_user: Dict[str, Any] = Depends(get_current_user),
     contact_service: ContactApiService = Depends(get_contact_service),
 ) -> ContactResponse:
     """依 ID 取得單一聯絡人詳細資訊。"""
-    row = contact_service.get_contact(contact_id)
+    row = contact_service.get_contact(contact_id, user_id=current_user["id"])
     if not row:
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,
@@ -60,7 +60,7 @@ async def get_contact(
 async def update_contact(
     contact_id: int,
     payload: ContactUpdateRequest,
-    current_user: str = Depends(get_current_user),
+    current_user: Dict[str, Any] = Depends(get_current_user),
     contact_service: ContactApiService = Depends(get_contact_service),
 ) -> ContactResponse:
     """更新指定聯絡人之暱稱或關係備註。"""
@@ -73,6 +73,7 @@ async def update_contact(
         relationship_note=payload.relationship_note,
         update_nickname=update_nickname,
         update_note=update_note,
+        user_id=current_user["id"],
     )
     if not updated:
         raise HTTPException(
@@ -91,11 +92,11 @@ async def update_contact(
 async def get_contact_events(
     contact_id: int,
     status: Optional[str] = None,
-    current_user: str = Depends(get_current_user),
+    current_user: Dict[str, Any] = Depends(get_current_user),
     message_service: MessageApiService = Depends(get_message_service),
 ) -> list[EventResponse]:
     """取得指定聯絡人之記憶事件紀錄。"""
-    events = message_service.get_contact_events(contact_id, status=status)
+    events = message_service.get_contact_events(contact_id, status=status, user_id=current_user["id"])
     if events is None:
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,

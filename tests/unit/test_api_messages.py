@@ -23,7 +23,7 @@ def test_setup(tmp_path):
     app = create_app()
     app.dependency_overrides[get_contact_repo] = lambda: contact_repo
     app.dependency_overrides[get_message_repo] = lambda: message_repo
-    app.dependency_overrides[get_current_user] = lambda: "authorized_user"
+    app.dependency_overrides[get_current_user] = lambda: {"id": 1, "username": "authorized_user"}
 
     client = TestClient(app)
     return client, contact_repo, message_repo
