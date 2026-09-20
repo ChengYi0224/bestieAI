@@ -5,7 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1] - 2026-09-21
+
+### Fixed — 修復訊息包含網址連結時調用 broadcast/link/ 導致 503 與 MQTT 斷線重連
+
+- **修復 instagrapi 訊息廣播端點 (HTTP 503)**：
+  - 修復 `instagrapi.Client.direct_send` 於字串包含 `"http"` 時錯誤切換至已遭 Meta 限制之 `broadcast/link/` 端點的問題。
+  - 在 `app/clients/instagram.py` 修補 `direct_send`，強制所有文字訊息一律走穩定的 `direct_v2/threads/broadcast/text/` 端點（Instagram 客戶端會自動渲染網址為可點擊超連結）。
+- **增強 Realtime 監聽與訊息發送例外隔離**：
+  - 於 `app/bot/poller.py` 為 `_on_realtime_message` 與私訊回覆處增加獨立例外防護，避免個別訊息發送異常波及主迴圈或造成 MQTT 長連接中斷重連。
+- **單元與合約測試覆蓋**：
+  - 於 `tests/contracts/test_api_contracts.py` 新增 `test_direct_send_forces_text_broadcast_even_with_links` 測試，確保包含網址時持續導向純文字廣播端點。
+
 ## [0.13.0] - 2026-09-20
+
 
 ### Added — Bot 多用戶 IG 登入/2FA 指令與 REST API 主動操作端點
 

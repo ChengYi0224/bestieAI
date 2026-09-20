@@ -148,22 +148,27 @@ class BotPoller:
             logger.error(f"MQTT 重新連線失敗: {e}")
 
     def _on_realtime_message(self, event: Dict[str, Any]) -> None:
-        msg_wrapper = event.get("message", {}) if isinstance(event, dict) else {}
-        thread_id = str(msg_wrapper.get("thread_id") or event.get("thread_id") or "")
-        item_id = str(msg_wrapper.get("item_id") or event.get("item_id") or "")
-        user_id = str(msg_wrapper.get("user_id") or event.get("user_id") or "")
-        text = msg_wrapper.get("text") or event.get("text") or ""
+        try:
+            msg_wrapper = event.get("message", {}) if isinstance(event, dict) else {}
+            thread_id = str(msg_wrapper.get("thread_id") or event.get("thread_id") or "")
+            item_id = str(msg_wrapper.get("item_id") or event.get("item_id") or "")
+            user_id = str(msg_wrapper.get("user_id") or event.get("user_id") or "")
+            text = msg_wrapper.get("text") or event.get("text") or ""
 
-        if not text and isinstance(msg_wrapper.get("value"), dict):
-            val = msg_wrapper["value"]
-            text = val.get("text", "")
-            item_id = item_id or str(val.get("item_id", ""))
-            user_id = user_id or str(val.get("user_id", ""))
+            if not text and isinstance(msg_wrapper.get("value"), dict):
+                val = msg_wrapper["value"]
+                text = val.get("text", "")
+                item_id = item_id or str(val.get("item_id", ""))
+                user_id = user_id or str(val.get("user_id", ""))
 
-        if not text or not str(user_id).strip():
-            return
+            if not text or not str(user_id).strip():
+                return
 
-        self._process_message(thread_id, user_id, item_id, text)
+            self._process_message(thread_id, user_id, item_id, text)
+        except Exception as e:
+            logger.error(f"即時推播處理異常: {e}")
+            log_error(e, context="BotPoller._on_realtime_message", logger_name="bestieAI.bot_poller")
+
 
     # ==================== 背景任務隊列 Worker ====================
 
@@ -562,7 +567,12 @@ class BotPoller:
             threading.Thread(target=_async_rebuild, daemon=True).start()
 
         else:
-            self.bot_ig.send_message(thread_id, result.message)
+            try:
+                self.bot_ig.send_message(thread_id, result.message)
+            except Exception as se:
+                logger.error(f"發送回覆訊息失敗: {se}")
+                log_error(se, context="BotPoller._process_message.send_message", logger_name="bestieAI.bot_poller")
+
 
     def _check_periodic_summaries(self) -> None:
         try:

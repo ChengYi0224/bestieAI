@@ -3,14 +3,79 @@ instagram.py — Instagram 私訊通訊外部適配器。
 純粹封裝 instagrapi Client 的對話串查詢、分頁防風控訊息抓取與訊息發送。
 """
 import time
+import json
 import random
 import logging
 from typing import List, Optional, Callable, Set, Union, Collection
 from instagrapi import Client
 from instagrapi.types import DirectThread, DirectMessage
+from instagrapi.mixins.direct import DirectMixin, _direct_id_list, SEND_ATTRIBUTES, SEND_ATTRIBUTE
+from instagrapi.extractors import extract_direct_message
 from app.core.rate_limit import ig_retry, paged_jitter
 
 logger = logging.getLogger("bestieAI.clients.instagram")
+
+
+def _safe_direct_send(
+    self: Client,
+    text: str,
+    user_ids: List[int] = [],
+    thread_ids: List[int] = [],
+    send_attribute: SEND_ATTRIBUTE = "message_button",
+    reply_to_message: Optional[DirectMessage] = None,
+) -> DirectMessage:
+    """
+    自訂純文字私訊發送，強制使用 broadcast/text/ 端點。
+    修復 instagrapi 原生在文字包含 'http' 時錯誤切換至已失效 broadcast/link/ 導致 HTTP 503 的問題。
+    """
+    assert self.user_id, "Login required"
+    user_ids = _direct_id_list(user_ids)
+    thread_ids = _direct_id_list(thread_ids)
+    assert (user_ids or thread_ids) and not (user_ids and thread_ids), (
+        "Specify user_ids or thread_ids, but not both"
+    )
+    assert send_attribute in SEND_ATTRIBUTES, f'Unsupported send_attribute="{send_attribute}" {SEND_ATTRIBUTES}'
+    token = self.generate_mutation_token()
+
+    kwargs = {
+        "action": "send_item",
+        "is_x_transport_forward": "false",
+        "send_silently": "false",
+        "is_shh_mode": "0",
+        "send_attribution": send_attribute,
+        "client_context": token,
+        "device_id": self.android_device_id,
+        "mutation_token": token,
+        "_uuid": self.uuid,
+        "btt_dual_send": "false",
+        "nav_chain": (
+            "1qT:feed_timeline:1,1qT:feed_timeline:2,1qT:feed_timeline:3,"
+            "7Az:direct_inbox:4,7Az:direct_inbox:5,5rG:direct_thread:7"
+        ),
+        "is_ae_dual_send": "false",
+        "offline_threading_id": token,
+        "text": text,
+    }
+    if thread_ids:
+        kwargs["thread_ids"] = json.dumps([int(tid) for tid in thread_ids])
+    if user_ids:
+        kwargs["recipient_users"] = json.dumps([[int(uid) for uid in user_ids]])
+    if reply_to_message:
+        kwargs["replied_to_action_source"] = "swipe"
+        kwargs["replied_to_item_id"] = reply_to_message.id
+        kwargs["replied_to_client_context"] = reply_to_message.client_context
+    result = self.private_request(
+        "direct_v2/threads/broadcast/text/",
+        data=self.with_default_data(kwargs),
+        with_signature=False,
+    )
+    return extract_direct_message(result["payload"])
+
+
+# 修補 instagrapi Client 的 direct_send 方法，全面改走 broadcast/text/
+DirectMixin.direct_send = _safe_direct_send
+Client.direct_send = _safe_direct_send
+
 
 
 class IGClient:

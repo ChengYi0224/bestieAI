@@ -65,3 +65,23 @@ def test_chromadb_contract(tmp_path):
     )
     assert len(results["documents"][0]) == 1
     assert results["documents"][0][0] == "測試文本"
+
+
+def test_direct_send_forces_text_broadcast_even_with_links():
+    """驗證 direct_send 在文字包含 http 連結時，仍強制發送至 broadcast/text/，避免 503 錯誤"""
+    from app.clients.instagram import Client
+    from unittest.mock import MagicMock
+
+    client = Client()
+    client.authorization_data = {"ds_user_id": 12345}
+    client.private_request = MagicMock(return_value={"payload": {
+
+        "item_id": "1", "user_id": 12345, "timestamp": 1234567, "item_type": "text", "text": "http://example.com"
+    }})
+
+    client.direct_send("請點擊此處: https://example.com", thread_ids=[99999])
+    client.private_request.assert_called_once()
+    called_endpoint = client.private_request.call_args[0][0]
+    assert called_endpoint == "direct_v2/threads/broadcast/text/"
+    assert "broadcast/link" not in called_endpoint
+

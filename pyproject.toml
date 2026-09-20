@@ -1,6 +1,7 @@
 [project]
 name = "bestieai"
-version = "0.13.0"
+version = "0.13.1"
+
 
 
 description = "Add your description here"
