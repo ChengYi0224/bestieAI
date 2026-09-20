@@ -41,9 +41,10 @@ def _run_bot() -> None:
                 pass
         sys.exit(0)
 
-    signal.signal(signal.SIGINT, _shutdown)
-    if hasattr(signal, "SIGBREAK"):
-        signal.signal(signal.SIGBREAK, _shutdown)
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGINT, _shutdown)
+        if hasattr(signal, "SIGBREAK"):
+            signal.signal(signal.SIGBREAK, _shutdown)
 
     try:
         poller.run()
