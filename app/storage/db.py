@@ -1,12 +1,15 @@
 """
 db.py — 資料庫連線、Schema 定義、自動遷移與平滑相容接口。
 """
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 from app.core.config import settings
 from app.storage.scope import ALL_USERS, UserScope
+
+logger = logging.getLogger("bestieAI.storage.db")
 
 
 def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
@@ -267,8 +270,8 @@ def should_update_summary(
         now_utc = datetime.now(timezone.utc)
         if (now_utc - updated_at).days >= days_lim and new_msgs > 0:
             return True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"判斷摘要是否逾期時解析 updated_at 失敗，視為不需更新: {e}")
 
     return False
 

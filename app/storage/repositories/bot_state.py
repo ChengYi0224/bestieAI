@@ -2,11 +2,14 @@
 bot_state.py — Bot 狀態、背景任務進度與聊天對話紀錄存取庫。
 """
 import json
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
 from app.storage.repositories.base import BaseRepository, with_connection
+
+logger = logging.getLogger("bestieAI.storage.bot_state")
 
 
 class BotStateRepository(BaseRepository):
@@ -25,7 +28,8 @@ class BotStateRepository(BaseRepository):
         if row and row["pending_selection"]:
             try:
                 return json.loads(row["pending_selection"])
-            except Exception:
+            except Exception as e:
+                logger.warning(f"pending_selection JSON 損毀，視為無待選項: {e}")
                 return None
         return None
 
@@ -42,7 +46,8 @@ class BotStateRepository(BaseRepository):
         if row and row["worker_status"]:
             try:
                 return json.loads(row["worker_status"])
-            except Exception:
+            except Exception as e:
+                logger.warning(f"worker_status JSON 損毀，視為無狀態: {e}")
                 return None
         return None
 

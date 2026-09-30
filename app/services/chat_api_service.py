@@ -79,8 +79,8 @@ class ChatApiService:
             try:
                 history_rows = self.bot_state_repo.get_conversations(contact_id=resolved_cid, limit=10)
                 chat_history = "\n".join([f"{r['role']}: {r['content']}" for r in history_rows])
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"讀取對話歷史失敗，以空歷史繼續: {e}")
 
         # 4. 調用 LLM 產生回覆
         reply = self.llm_client.generate_reply(

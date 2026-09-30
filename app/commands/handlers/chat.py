@@ -103,8 +103,8 @@ class ChatHandler:
                     if nick_results:
                         snippets = "\n".join([r["text"] for r in nick_results])
                         cross_rag_list.append(f"【關於 {nick} ({c['ig_account_id']}) 的紀錄】\n{snippets}")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"跨對象記憶檢索失敗，本次對話略過: {e}")
 
         cross_rag_str = "\n\n---\n\n".join(cross_rag_list) if cross_rag_list else ""
 

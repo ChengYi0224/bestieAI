@@ -254,8 +254,8 @@ class BotPoller:
             if self.bot_client:
                 try:
                     self.bot_client.realtime_disconnect()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"重連前關閉舊 MQTT 連線失敗（可忽略）: {e}")
                 self._setup_realtime()
         except Exception as e:
             logger.error(f"MQTT 重新連線失敗: {e}")
@@ -739,8 +739,8 @@ class BotPoller:
                 logger.info("接收到終止訊號 (Ctrl+C)，正在關閉 MQTT 連線...")
                 try:
                     self.bot_client.realtime_disconnect()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"關閉 MQTT 連線失敗（可忽略）: {e}")
                 break
             except LoginRequired:
                 logger.error("Session 過期失效，請重新啟動以手動驗證！")

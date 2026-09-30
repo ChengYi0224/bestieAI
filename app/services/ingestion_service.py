@@ -38,6 +38,7 @@ import logging
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
+from app.utils.progress import notify_progress
 from app.core.config import settings
 from app.core.error_logger import log_error
 from app.clients.gemini import GeminiClient
@@ -265,11 +266,7 @@ class IngestionPipeline:
             return [[c] for c in chunks]
 
         # 取得向量
-        if progress_callback:
-            try:
-                progress_callback(f"計算 {len(chunks)} 條事件向量 Embeddings 中...")
-            except Exception:
-                pass
+        notify_progress(progress_callback, f"計算 {len(chunks)} 條事件向量 Embeddings 中...")
 
         try:
             texts = [c["text"] for c in chunks]
@@ -279,11 +276,7 @@ class IngestionPipeline:
             log_error(e, context="IngestionPipeline.rebuild_vectors — get_embeddings_batch", logger_name="bestieAI.ingestion_service")
             return [[c] for c in chunks]
 
-        if progress_callback:
-            try:
-                progress_callback("進行時序 Complete Linkage 向量分群中...")
-            except Exception:
-                pass
+        notify_progress(progress_callback, "進行時序 Complete Linkage 向量分群中...")
 
         clusterer = EventClusterer(
             similarity_threshold=similarity_threshold,
@@ -451,22 +444,14 @@ class IngestionPipeline:
             logger.warning(f"聯絡人不存在: {cid}")
             return {"contact_id": cid, "target_username": target_username, "total_messages": 0, "chunks_rebuilt": 0}
 
-        if progress_callback:
-            try:
-                progress_callback(f"正在讀取 {target_username} 本地對話紀錄...")
-            except Exception:
-                pass
+        notify_progress(progress_callback, f"正在讀取 {target_username} 本地對話紀錄...")
 
         messages = get_messages(contact_id=cid, db_path=db_path)
         total_msgs = len(messages) if messages else 0
 
         if not messages:
             logger.info(f"聯絡人 {target_username} 無任何訊息。")
-            if progress_callback:
-                try:
-                    progress_callback(f"聯絡人 {target_username} 無任何歷史對話。")
-                except Exception:
-                    pass
+            notify_progress(progress_callback, f"聯絡人 {target_username} 無任何歷史對話。")
             return {"contact_id": cid, "target_username": target_username, "total_messages": 0, "chunks_rebuilt": 0}
 
         # 由 extract_event_chunks（EventExtractor）內部依時間區間自動判斷命中與增量補提煉
@@ -482,19 +467,15 @@ class IngestionPipeline:
             return {"contact_id": cid, "target_username": target_username, "total_messages": total_msgs, "chunks_rebuilt": 0}
 
         # 寫入 ChromaDB
-        if progress_callback:
-            try:
-                progress_callback(f"正在寫入 ChromaDB 向量庫 (共 {len(final_chunks)} 條記憶)...")
-            except Exception:
-                pass
+        notify_progress(progress_callback, f"正在寫入 ChromaDB 向量庫 (共 {len(final_chunks)} 條記憶)...")
 
         try:
             self.vector_store.collection.delete(where={"contact_id": cid})
         except Exception:
             try:
                 self.vector_store.delete_chunks_by_contact(cid)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"清除 contact_id={cid} 舊向量失敗，可能殘留重複記憶: {e}")
         self.vector_store.add_chunks(contact_id=cid, chunks=final_chunks)
 
         # 持久化已融合的條目
@@ -505,11 +486,7 @@ class IngestionPipeline:
             log_error(e, context="IngestionPipeline.rebuild_vectors — save_contact_events", logger_name="bestieAI.ingestion_service")
 
         logger.info(f"成功為 contact_id={cid} 重建 {len(final_chunks)} 條向量記憶。")
-        if progress_callback:
-            try:
-                progress_callback(f"向量庫重建完成！共寫入 {len(final_chunks)} 條向量記憶")
-            except Exception:
-                pass
+        notify_progress(progress_callback, f"向量庫重建完成！共寫入 {len(final_chunks)} 條向量記憶")
 
         return {
             "contact_id": cid,
@@ -559,20 +536,12 @@ class IngestionPipeline:
         contact_id = get_or_create_contact(ig_account_id=target_username, display_name=target_username, db_path=db_path)
         inserted_count = save_messages(contact_id=contact_id, messages=processed_msgs, db_path=db_path)
 
-        if progress_callback:
-            try:
-                progress_callback(f"訊息匯入完成 ({len(normalized_msgs)} 則)，已存入資料庫，準備重建向量記憶...")
-            except Exception:
-                pass
+        notify_progress(progress_callback, f"訊息匯入完成 ({len(normalized_msgs)} 則)，已存入資料庫，準備重建向量記憶...")
 
         # 重建向量資料庫
         rebuild_res = self.rebuild_vectors(contact_id, progress_callback=progress_callback, db_path=db_path)
 
-        if progress_callback:
-            try:
-                progress_callback("正在生成人物關係日常摘要卡...")
-            except Exception:
-                pass
+        notify_progress(progress_callback, "正在生成人物關係日常摘要卡...")
 
         # 重新生成人物關係日常摘要卡
         all_msgs = get_all_messages(contact_id, db_path=db_path)
@@ -675,11 +644,7 @@ class IngestionPipeline:
     ) -> Dict[str, Any]:
         """生成全景關係復盤長文。"""
         from app.storage.db import get_contact_by_username, get_all_messages, update_contact_summary
-        if progress_callback:
-            try:
-                progress_callback(f"正在讀取 {target_username} 之完整歷史對話紀錄...")
-            except Exception:
-                pass
+        notify_progress(progress_callback, f"正在讀取 {target_username} 之完整歷史對話紀錄...")
 
         contact_row = get_contact_by_username(target_username, db_path=db_path)
         if not contact_row:
@@ -690,11 +655,7 @@ class IngestionPipeline:
         if not all_msgs:
             raise ValueError(f"聯絡人 {target_username} 無任何對話紀錄。")
 
-        if progress_callback:
-            try:
-                progress_callback(f"共 {len(all_msgs)} 則對話，正在呼叫 LLM 進行 7 大維度全景深度復盤分析...")
-            except Exception:
-                pass
+        notify_progress(progress_callback, f"共 {len(all_msgs)} 則對話，正在呼叫 LLM 進行 7 大維度全景深度復盤分析...")
 
         all_text = format_chat_messages(all_msgs, other_label="對方")
         if self.llm_client and hasattr(self.llm_client, "generate_full_history_summary"):
@@ -702,11 +663,7 @@ class IngestionPipeline:
         else:
             full_summary = self.summarizer.generate_full_summary(all_text)
 
-        if progress_callback:
-            try:
-                progress_callback("全景復盤長文已生成，正在更新資料庫與摘要卡...")
-            except Exception:
-                pass
+        notify_progress(progress_callback, "全景復盤長文已生成，正在更新資料庫與摘要卡...")
 
         from app.storage.db import update_full_history_summary
         update_full_history_summary(contact_id, full_summary, db_path=db_path)

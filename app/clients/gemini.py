@@ -143,15 +143,15 @@ class GeminiClient:
                             candidate_tokens=c_tok,
                             total_tokens=t_tok,
                         )
-                    except Exception:
-                        pass
+                    except Exception as log_err:
+                        logger.debug(f"寫入 LLM 日誌失敗（不影響回應）: {log_err}")
                     return out_text
                 except Exception as e:
                     try:
                         from app.services.llm_service import log_llm_call
                         log_llm_call(model=model, prompt=prompt, error=e, duration_sec=time.time() - call_start)
-                    except Exception:
-                        pass
+                    except Exception as log_err:
+                        logger.debug(f"寫入 LLM 錯誤日誌失敗（不影響流程）: {log_err}")
                     err_str = str(e)
                     is_rate_limit = _is_rate_limit(err_str)
                     is_invalid = _is_invalid_key(err_str)
@@ -186,8 +186,8 @@ class GeminiClient:
             from google.genai import types
             if dim:
                 config = types.EmbedContentConfig(output_dimensionality=dim)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"建立 Embedding 設定失敗，改用模型預設維度: {e}")
 
         all_embeddings: List[List[float]] = []
 

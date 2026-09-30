@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
+from app.utils.progress import notify_progress
 from app.core.config import settings
 from app.clients.gemini import GeminiClient
 from app.utils.text import parse_cluster_results
@@ -56,11 +57,7 @@ class EventConsolidator:
         for batch_start in range(0, total_multi, self.batch_size):
             chunk_group = multi_clusters[batch_start:batch_start + self.batch_size]
             end_idx = min(batch_start + len(chunk_group), total_multi)
-            if progress_callback:
-                try:
-                    progress_callback(f"同質事件融合中: 第 {batch_start + 1}~{end_idx}/{total_multi} 群...")
-                except Exception:
-                    pass
+            notify_progress(progress_callback, f"同質事件融合中: 第 {batch_start + 1}~{end_idx}/{total_multi} 群...")
 
             # 2. 自己組裝多群組 XML 結構 Payload
             payload_blocks = []
