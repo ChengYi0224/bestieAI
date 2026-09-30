@@ -12,4 +12,10 @@ logs/
 *.log
 tools/
 
+
+# GitNexus 索引與其產生的 skills（可用 gitnexus analyze 重新產生）
 .gitnexus/
+.claude/skills/gitnexus-*/
+
+# Claude Code 個人設定
+.claude/settings.local.json
