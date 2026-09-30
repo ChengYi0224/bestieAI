@@ -10,12 +10,14 @@ repositories — 資料存取庫模式 (Repository Pattern) 模組。
 """
 from app.storage.repositories.base import BaseRepository, with_connection
 from app.storage.repositories.contacts import ContactRepository
+from app.storage.scope import ALL_USERS
 from app.storage.repositories.messages import MessageRepository
 from app.storage.repositories.bot_state import BotStateRepository
 from app.storage.repositories.events import EventRepository
 from app.storage.repositories.users import UserRepository
 
 __all__ = [
+    "ALL_USERS",
     "BaseRepository",
     "with_connection",
     "ContactRepository",

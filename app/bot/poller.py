@@ -47,6 +47,7 @@ from app.bot.router import CommandRouter
 from app.services.ingestion_service import IngestionPipeline
 from app.sources.factory import SourceAdapterFactory
 from app.storage.db import set_worker_status, get_worker_status, set_active_contact
+from app.storage.scope import ALL_USERS
 
 logger = logging.getLogger("bestieAI.bot_poller")
 
@@ -646,7 +647,7 @@ class BotPoller:
         try:
             from app.storage.repositories import ContactRepository
             contact_repo = ContactRepository()
-            rows = contact_repo.get_tracked_contacts()
+            rows = contact_repo.get_tracked_contacts(user_id=ALL_USERS)  # 背景排程需同步所有使用者追蹤中的對象
             for r in rows:
                 updated = self.ingestion.check_and_update_summary(r["id"])
                 if updated:

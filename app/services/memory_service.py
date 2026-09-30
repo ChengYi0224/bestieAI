@@ -138,7 +138,7 @@ class MemoryManager:
         if contact_id is not None:
             from app.storage.repositories.contacts import ContactRepository
             contact_repo = ContactRepository(db_path=self.db_path)
-            contact = contact_repo.get_by_id(contact_id)
+            contact = contact_repo.get_by_id(contact_id, user_id=self.user_id)
         else:
             contact = get_active_contact(db_path=self.db_path)
 

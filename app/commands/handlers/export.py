@@ -22,6 +22,7 @@ from typing import Any, Optional, Callable
 
 from app.commands.base import CommandResult
 from app.commands.commands import ExportCommand
+from app.core.config import settings
 from app.storage.repositories import ContactRepository, MessageRepository
 from app.utils.db import row_to_dict, get_row_field
 from app.utils.text import format_chat_messages
@@ -46,7 +47,7 @@ class ExportHandler:
 
     def handle_export(self, cmd: ExportCommand) -> CommandResult:
         contact = (
-            self.contact_repo.find_by_identifier(cmd.target)
+            self.contact_repo.find_by_identifier(cmd.target, user_id=settings.BOT_USER_ID)
             if cmd.target
             else self.contact_repo.get_active()
         )

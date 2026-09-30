@@ -21,6 +21,7 @@ from app.commands.commands import (
     TrackCommand, TrackFullCommand, SelectCommand, SelectChoiceCommand,
     NicknameCommand, UntrackCommand, ListContactsCommand, StatusCommand,
 )
+from app.core.config import settings
 from app.storage.repositories import ContactRepository, BotStateRepository
 
 
@@ -72,7 +73,7 @@ class ContactHandler:
                 message="格式錯誤！請提供要切換的帳號或名稱關鍵字：select <關鍵字>"
             )
 
-        matches = self.contact_repo.search_fuzzy(query_key)
+        matches = self.contact_repo.search_fuzzy(query_key, user_id=settings.BOT_USER_ID)
         if not matches:
             return CommandResult(
                 success=False,
@@ -113,7 +114,7 @@ class ContactHandler:
         if 0 <= cmd.choice_index < len(pending_ids):
             selected_id = pending_ids[cmd.choice_index]
             self.contact_repo.set_active_by_id(selected_id)
-            target = self.contact_repo.get_by_id(selected_id)
+            target = self.contact_repo.get_by_id(selected_id, user_id=settings.BOT_USER_ID)
             name_str = f"（{target['display_name']}）" if target and target["display_name"] else ""
             return CommandResult(
                 success=True,
@@ -130,7 +131,7 @@ class ContactHandler:
             return CommandResult(success=False, message="格式錯誤！請提供暱稱：nickname <暱稱> [IG_ID]")
 
         if cmd.target:
-            target = self.contact_repo.get_by_username(cmd.target)
+            target = self.contact_repo.get_by_username(cmd.target, user_id=settings.BOT_USER_ID)
         else:
             target = self.contact_repo.get_active()
 
@@ -150,7 +151,7 @@ class ContactHandler:
     def handle_untrack(self, cmd: UntrackCommand) -> CommandResult:
         if not cmd.target:
             return CommandResult(success=False, message="格式錯誤！請指定對象：untrack <IG_ID>")
-        self.contact_repo.untrack(cmd.target)
+        self.contact_repo.untrack(cmd.target, user_id=settings.BOT_USER_ID)
         return CommandResult(
             success=True,
             message=f"已將 {cmd.target} 標記為停止追蹤。",
@@ -158,7 +159,7 @@ class ContactHandler:
         )
 
     def handle_list(self, cmd: ListContactsCommand) -> CommandResult:
-        rows = self.contact_repo.list_all()
+        rows = self.contact_repo.list_all(user_id=settings.BOT_USER_ID)
 
 
         if not rows:

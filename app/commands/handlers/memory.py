@@ -14,6 +14,7 @@ PIPELINE (L2):
 from typing import Any, Optional
 
 from app.commands.base import CommandResult
+from app.core.config import settings
 from app.commands.commands import (
     MeCommand, CardCommand, RefreshSummaryCommand,
     SummarizeHistoryCommand, SyncCommand, RebuildVectorsCommand,
@@ -45,7 +46,7 @@ class MemoryHandler:
 
     def handle_card(self, cmd: CardCommand) -> CommandResult:
         contact = (
-            self.contact_repo.find_by_identifier(cmd.target)
+            self.contact_repo.find_by_identifier(cmd.target, user_id=settings.BOT_USER_ID)
             if cmd.target
             else self.contact_repo.get_active()
         )

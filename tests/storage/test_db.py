@@ -1,4 +1,6 @@
 import pytest
+from app.core.config import settings
+from app.storage.scope import ALL_USERS
 from pathlib import Path
 from app.storage.db import (
     init_db,
@@ -106,31 +108,31 @@ def test_contact_repository_find_and_tracked(temp_db):
     c2 = repo.get_or_create("user_beta", "Beta Test")
 
     # 1. 依 IG 帳號尋找（不分大小寫）
-    found_id = repo.find_by_identifier("USER_ALPHA")
+    found_id = repo.find_by_identifier("USER_ALPHA", user_id=ALL_USERS)
     assert found_id is not None
     assert found_id["ig_account_id"] == "user_alpha"
 
     # 2. 依顯示名稱尋找
-    found_name = repo.find_by_identifier("Beta Test")
+    found_name = repo.find_by_identifier("Beta Test", user_id=ALL_USERS)
     assert found_name is not None
     assert found_name["ig_account_id"] == "user_beta"
 
     # 3. 依暱稱尋找
-    found_nick = repo.find_by_identifier("小阿")
+    found_nick = repo.find_by_identifier("小阿", user_id=ALL_USERS)
     assert found_nick is not None
     assert found_nick["id"] == c1
 
     # 4. 查無對象
-    assert repo.find_by_identifier("not_exist") is None
-    assert repo.find_by_identifier("") is None
+    assert repo.find_by_identifier("not_exist", user_id=ALL_USERS) is None
+    assert repo.find_by_identifier("", user_id=ALL_USERS) is None
 
     # 5. 測試 get_tracked_contacts
-    tracked = repo.get_tracked_contacts()
+    tracked = repo.get_tracked_contacts(user_id=ALL_USERS)
     assert len(tracked) == 2
 
     # 將其中一位設為 untracked
-    repo.untrack("user_alpha")
-    tracked_after = repo.get_tracked_contacts()
+    repo.untrack("user_alpha", user_id=ALL_USERS)
+    tracked_after = repo.get_tracked_contacts(user_id=ALL_USERS)
     assert len(tracked_after) == 1
     assert tracked_after[0]["ig_account_id"] == "user_beta"
 
@@ -165,7 +167,24 @@ def test_handler_dependency_injection(temp_db):
     res_exp = export_h.handle_export(ExportCommand(target="mock_user", immediate=True))
     assert res_exp.success is True
     assert "你好" in res_exp.message
-    mock_contact_repo.find_by_identifier.assert_called_once_with("mock_user")
+    mock_contact_repo.find_by_identifier.assert_called_once_with("mock_user", user_id=settings.BOT_USER_ID)
     mock_msg_repo.get_recent.assert_called_once_with(contact_id=1, limit=20)
 
 
+
+
+def test_contact_repo_requires_explicit_user_scope(tmp_path):
+    """user_id 漏傳或傳 None 不得靜默退化為跨租戶查詢。"""
+    import pytest
+    from app.storage.db import init_db
+    from app.storage.repositories import ContactRepository
+
+    db = tmp_path / "scope.db"
+    init_db(db_path=db)
+    repo = ContactRepository(db)
+    with pytest.raises(TypeError):
+        repo.get_by_id(1)  # 缺少必填 keyword
+    with pytest.raises(TypeError):
+        repo.get_by_id(1, user_id=None)
+    with pytest.raises(TypeError):
+        repo.list_all(user_id=True)

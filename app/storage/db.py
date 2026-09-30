@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 from app.core.config import settings
+from app.storage.scope import ALL_USERS, UserScope
 
 
 def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
@@ -142,7 +143,7 @@ def get_active_contact(contact_id: Optional[int] = None, db_path: Optional[Path]
     from app.storage.repositories import ContactRepository
     repo = ContactRepository(db_path)
     if contact_id is not None:
-        return repo.get_by_id(contact_id)
+        return repo.get_by_id(contact_id, user_id=ALL_USERS)
     return repo.get_active()
 
 
@@ -156,9 +157,9 @@ def set_active_contact(ig_account_id: str, db_path: Optional[Path] = None) -> bo
     return ContactRepository(db_path).set_active(ig_account_id)
 
 
-def search_contacts_fuzzy(query: str, db_path: Optional[Path] = None) -> List[sqlite3.Row]:
+def search_contacts_fuzzy(query: str, user_id: UserScope, db_path: Optional[Path] = None) -> List[sqlite3.Row]:
     from app.storage.repositories import ContactRepository
-    return ContactRepository(db_path).search_fuzzy(query)
+    return ContactRepository(db_path).search_fuzzy(query, user_id=user_id)
 
 
 def set_pending_selection(candidate_ids: List[int], db_path: Optional[Path] = None) -> None:
@@ -212,12 +213,12 @@ def get_bot_conversations(contact_id: Optional[int], limit: int = 20, db_path: O
 
 def get_contact_by_id(contact_id: int, db_path: Optional[Path] = None) -> Optional[sqlite3.Row]:
     from app.storage.repositories import ContactRepository
-    return ContactRepository(db_path).get_by_id(contact_id)
+    return ContactRepository(db_path).get_by_id(contact_id, user_id=ALL_USERS)
 
 
-def get_contact_by_username(ig_account_id: str, db_path: Optional[Path] = None) -> Optional[sqlite3.Row]:
+def get_contact_by_username(ig_account_id: str, db_path: Optional[Path] = None, user_id: UserScope = ALL_USERS) -> Optional[sqlite3.Row]:
     from app.storage.repositories import ContactRepository
-    return ContactRepository(db_path).get_by_username(ig_account_id)
+    return ContactRepository(db_path).get_by_username(ig_account_id, user_id=user_id)
 
 
 def get_latest_message_time(contact_id: int, db_path: Optional[Path] = None) -> Optional[str]:
@@ -318,18 +319,18 @@ def clear_contact_events(
     EventRepository(db_path).clear_events(contact_id, status=status)
 
 
-def find_contact_by_identifier(identifier: str, db_path: Optional[Path] = None) -> Optional[sqlite3.Row]:
+def find_contact_by_identifier(identifier: str, user_id: UserScope, db_path: Optional[Path] = None) -> Optional[sqlite3.Row]:
     from app.storage.repositories import ContactRepository
-    return ContactRepository(db_path).find_by_identifier(identifier)
+    return ContactRepository(db_path).find_by_identifier(identifier, user_id=user_id)
 
 
-def get_tracked_contacts(db_path: Optional[Path] = None) -> List[sqlite3.Row]:
+def get_tracked_contacts(user_id: UserScope = ALL_USERS, db_path: Optional[Path] = None) -> List[sqlite3.Row]:
     from app.storage.repositories import ContactRepository
-    return ContactRepository(db_path).get_tracked_contacts()
+    return ContactRepository(db_path).get_tracked_contacts(user_id=user_id)
 
 
-def untrack_contact(ig_account_id: str, db_path: Optional[Path] = None) -> bool:
+def untrack_contact(ig_account_id: str, user_id: UserScope, db_path: Optional[Path] = None) -> bool:
     from app.storage.repositories import ContactRepository
-    return ContactRepository(db_path).untrack(ig_account_id)
+    return ContactRepository(db_path).untrack(ig_account_id, user_id=user_id)
 
 
