@@ -75,3 +75,34 @@ def test_sync_with_amount_skips_backfill_when_anchored():
         poller._sync_contact_messages("u", amount=20)
 
     poller._start_backfill.assert_not_called()
+
+
+def test_sync_returns_failed_marker_on_error():
+    from app.commands.base import SYNC_FAILED
+    poller = _poller()
+    with patch("app.sources.SourceAdapterFactory.create", side_effect=RuntimeError("boom")), \
+         patch("app.storage.db.get_or_create_contact", return_value=7), \
+         patch("app.storage.db.get_latest_item_ids", return_value=set()):
+        assert poller._sync_contact_messages("u", amount=10) == SYNC_FAILED
+
+
+def test_seen_message_ids_are_bounded_and_deduplicated():
+    poller = _poller()
+    poller.MAX_SEEN_MESSAGE_IDS = 3
+    assert poller._mark_seen("a") is True
+    assert poller._mark_seen("a") is False
+    for i in "bcd":
+        poller._mark_seen(i)
+    assert len(poller.seen_message_ids) == 3
+    assert "a" not in poller.seen_message_ids  # 最舊的被淘汰
+
+
+def test_get_main_ig_logs_in_once():
+    poller = BotPoller(router=MagicMock())
+    poller.session_manager = MagicMock()
+    with patch("app.bot.poller.IGClient") as ig_cls:
+        first = poller._get_main_ig()
+        second = poller._get_main_ig()
+    assert first is second
+    poller.session_manager.login.assert_called_once_with("main")
+    ig_cls.assert_called_once()

@@ -41,3 +41,7 @@ class CommandHandler:
     """命令處理器基礎介面。"""
     def handle(self, command: BaseCommand) -> CommandResult:
         raise NotImplementedError
+
+
+# sync_callback 的回傳值：>= 0 為新增則數，SYNC_FAILED 表示同步失敗（已 fallback 使用本地紀錄）
+SYNC_FAILED = -1

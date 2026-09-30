@@ -34,7 +34,9 @@ import logging
 import queue
 import threading
 from datetime import datetime, timezone
-from typing import Set, Optional, Dict, Any, List
+from collections import deque
+from contextlib import contextmanager
+from typing import Set, Optional, Dict, Any, List, Deque
 from instagrapi import Client
 from instagrapi.exceptions import LoginRequired
 
@@ -44,6 +46,7 @@ from app.core.error_logger import log_error
 from app.services.session_service import SessionManager
 from app.services.ig_service import IGClient
 from app.bot.router import CommandRouter
+from app.commands.base import SYNC_FAILED
 from app.services.ingestion_service import IngestionPipeline
 from app.sources.factory import SourceAdapterFactory
 from app.storage.db import set_worker_status, get_worker_status, set_active_contact
@@ -86,11 +89,54 @@ class BotPoller:
         self._current_task: Optional[Dict[str, Any]] = None
         self._worker_thread: Optional[threading.Thread] = None
         self._ig_lock = threading.Lock()
+        self._client_lock = threading.Lock()
+        self._activity_lock = threading.Lock()
+        self._active_ingestions = 0
+        self._seen_lock = threading.Lock()
+        self._seen_order: Deque[str] = deque()
         self._backfill_guard = threading.Lock()
         self._backfilling: Set[str] = set()
 
+    MAX_SEEN_MESSAGE_IDS = 5000
+
+    def _get_main_ig(self) -> IGClient:
+        """取得（必要時登入）主帳號 IG 連線；全類別唯一登入點，避免多執行緒重複登入。"""
+        with self._client_lock:
+            if self.main_ig is None:
+                self.main_ig = IGClient(self.session_manager.login("main"))
+            return self.main_ig
+
+    @contextmanager
+    def _ingestion_activity(self):
+        """標記「正在使用 main_ig 進行長時間抓取」，讓背景補抓讓出連線。"""
+        with self._activity_lock:
+            self._active_ingestions += 1
+        try:
+            yield
+        finally:
+            with self._activity_lock:
+                self._active_ingestions -= 1
+
+    def _ig_busy(self) -> bool:
+        return (
+            self._current_task is not None
+            or not self._task_queue.empty()
+            or self._active_ingestions > 0
+        )
+
+    def _mark_seen(self, item_id: str) -> bool:
+        """記錄已處理的 item_id；已見過回傳 False。保留最近 MAX_SEEN_MESSAGE_IDS 筆以免無限成長。"""
+        with self._seen_lock:
+            if item_id in self.seen_message_ids:
+                return False
+            self.seen_message_ids.add(item_id)
+            self._seen_order.append(item_id)
+            while len(self._seen_order) > self.MAX_SEEN_MESSAGE_IDS:
+                self.seen_message_ids.discard(self._seen_order.popleft())
+            return True
+
     def _sync_contact_messages(self, target_username: str, amount: int = 0) -> int:
-        """從 Instagram 同步指定對象之最新私訊至 SQLite 資料庫。
+        """從 Instagram 同步指定對象之最新私訊至 SQLite 資料庫。失敗時回傳 SYNC_FAILED（-1）。
 
         amount>0 時前景只抓最新 amount 則即回傳；若尚未接上本地既有紀錄，
         剩餘的更早歷史交由背景執行緒續抓。0 表示前景一路抓到接上本地既有紀錄。
@@ -98,9 +144,7 @@ class BotPoller:
         if not target_username:
             return 0
         try:
-            if self.main_ig is None:
-                main_client = self.session_manager.login("main")
-                self.main_ig = IGClient(main_client)
+            self._get_main_ig()
             from app.storage.db import get_or_create_contact, save_messages, get_latest_item_ids
             contact_id = get_or_create_contact(ig_account_id=target_username, display_name=target_username)
             existing_ids = get_latest_item_ids(contact_id=contact_id, limit=50)
@@ -126,7 +170,7 @@ class BotPoller:
         except Exception as e:
             logger.warning(f"Auto-Sync 同步 {target_username} 失敗 ({e})，Fallback 使用資料庫現有紀錄。")
             log_error(e, context=f"BotPoller._sync_contact_messages — {target_username}", logger_name="bestieAI.bot_poller")
-            return 0
+            return SYNC_FAILED
 
     @staticmethod
     def _to_db_rows(normalized_msgs) -> List[Dict[str, Any]]:
@@ -154,7 +198,7 @@ class BotPoller:
         try:
             while cursor:
                 # 讓出 IG 連線給前景任務，避免同時打 API 觸發風控
-                while self._current_task is not None or not self._task_queue.empty():
+                while self._ig_busy():
                     time.sleep(5.0)
                 adapter = SourceAdapterFactory.create("instagram", ig_client=self.main_ig)
                 with self._ig_lock:
@@ -305,9 +349,7 @@ class BotPoller:
                     logger.info(f"[Worker] {target} 全量抓取進度：{detail_msg}")
 
             try:
-                if self.main_ig is None:
-                    main_client = self.session_manager.login("main")
-                    self.main_ig = IGClient(main_client)
+                self._get_main_ig()
                 adapter = SourceAdapterFactory.create("instagram", ig_client=self.main_ig)
                 info = self.ingestion.run_full_ingestion(
                     adapter,
@@ -367,10 +409,8 @@ class BotPoller:
         if not text or not thread_id:
             return
 
-        if item_id and item_id in self.seen_message_ids:
+        if item_id and not self._mark_seen(item_id):
             return
-        if item_id:
-            self.seen_message_ids.add(item_id)
 
         logger.info(f"[Realtime Push] 收到授權發訊者 ({user_id}) 訊息: {text}")
         try:
@@ -392,11 +432,10 @@ class BotPoller:
             amount = result.data.get("amount", settings.TRACK_DEFAULT_LIMIT)
             self.bot_ig.send_message(thread_id, f"開始抓取與 {target} 的歷史訊息（上限 {amount} 則）...")
             try:
-                if self.main_ig is None:
-                    main_client = self.session_manager.login("main")
-                    self.main_ig = IGClient(main_client)
+                self._get_main_ig()
                 adapter = SourceAdapterFactory.create("instagram", ig_client=self.main_ig)
-                info = self.ingestion.run_ingestion(adapter, target, amount=amount)
+                with self._ingestion_activity():
+                    info = self.ingestion.run_ingestion(adapter, target, amount=amount)
                 set_active_contact(target)
                 reply_text = f"已追蹤 {target}，匯入 {info['inserted_messages']} 則訊息，關係摘要卡已建立。"
 
@@ -546,11 +585,10 @@ class BotPoller:
                 "last_update": datetime.now(timezone.utc).isoformat()
             })
             try:
-                if self.main_ig is None:
-                    main_client = self.session_manager.login("main")
-                    self.main_ig = IGClient(main_client)
+                self._get_main_ig()
                 adapter = SourceAdapterFactory.create("instagram", ig_client=self.main_ig)
-                sync_info = self.ingestion.sync_messages(adapter, target)
+                with self._ingestion_activity():
+                    sync_info = self.ingestion.sync_messages(adapter, target)
                 summary_msg = "（摘要卡已更新）" if sync_info["summary_updated"] else ""
                 reply_text = f"同步完成：新增 {sync_info['new_messages_count']} 則訊息，提煉 {sync_info['chunks_added']} 條事件記憶。{summary_msg}"
                 set_worker_status({

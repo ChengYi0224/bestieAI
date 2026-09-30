@@ -20,7 +20,7 @@ PIPELINE (L2):
 import logging
 from typing import Any, Optional, Callable
 
-from app.commands.base import CommandResult
+from app.commands.base import CommandResult, SYNC_FAILED
 from app.commands.commands import ExportCommand
 from app.core.config import settings
 from app.storage.repositories import ContactRepository, MessageRepository
@@ -70,10 +70,12 @@ class ExportHandler:
         limit = max(1, cmd.limit)
 
         # 預設先執行增量同步（Auto-Sync），除非指定 -I / immediate；只需同步 limit 則，抓夠即停
+        sync_failed = False
         if not cmd.immediate and self.sync_callback and target_id:
             try:
-                self.sync_callback(target_id, amount=limit)
+                sync_failed = self.sync_callback(target_id, amount=limit) == SYNC_FAILED
             except Exception as e:
+                sync_failed = True
                 logger.warning(f"自動同步訊息失敗，Fallback 使用本地既有紀錄: {e}")
 
         # 從本地 SQLite 取得最新對話
@@ -82,14 +84,16 @@ class ExportHandler:
         if not messages:
             return CommandResult(
                 success=True,
-                message=f"目前查無與 {target_label} 的對話紀錄。",
-                data={"messages": [], "contact": row_to_dict(contact)}
+                message=f"目前查無與 {target_label} 的對話紀錄。" + ("（同步最新私訊失敗）" if sync_failed else ""),
+                data={"messages": [], "contact": row_to_dict(contact), "sync_failed": sync_failed}
             )
 
         # 格式化輸出
         header = f"【與 {target_label} 的最新 {len(messages)} 則對話紀錄】"
         formatted_messages = format_chat_messages(messages, other_label=target_label)
         formatted_text = f"{header}\n\n{formatted_messages}" if formatted_messages else header
+        if sync_failed:
+            formatted_text = f"⚠️ 同步最新私訊失敗，以下為本地既有紀錄（可能不是最新）。\n\n{formatted_text}"
         return CommandResult(
             success=True,
             message=formatted_text,
@@ -97,5 +101,6 @@ class ExportHandler:
                 "messages": [row_to_dict(m) for m in messages],
                 "contact": row_to_dict(contact),
                 "count": len(messages),
+                "sync_failed": sync_failed,
             }
         )

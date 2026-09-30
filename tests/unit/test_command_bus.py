@@ -238,3 +238,20 @@ def test_help_command_categorization(test_env):
     assert "需搭配 select" in res_all.message
     assert "獨立指令" in res_all.message
     assert "exp [數量] [-I]" in res_all.message
+
+
+def test_export_reports_sync_failure(test_env):
+    from app.commands.base import SYNC_FAILED
+    from app.storage.db import get_or_create_contact, set_active_contact, save_messages
+    bus = test_env["bus"]
+    db_file = test_env["db_file"]
+    cid = get_or_create_contact("target_user", "Target", db_path=db_file)
+    set_active_contact("target_user", db_path=db_file)
+    save_messages(cid, [
+        {"ig_item_id": "m1", "sender": "them", "content": "哈囉！", "sent_at": "2026-09-19T10:00:00"},
+    ], db_path=db_file)
+    test_env["service"]._export.sync_callback = lambda target, amount=0: SYNC_FAILED
+    res = bus.dispatch(ExportCommand(limit=5, immediate=False))
+    assert res.success is True
+    assert res.data["sync_failed"] is True
+    assert "同步最新私訊失敗" in res.message
