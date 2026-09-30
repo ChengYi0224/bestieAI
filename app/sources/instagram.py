@@ -38,6 +38,9 @@ class InstagramAdapter(BaseSourceAdapter):
 
     def __init__(self, ig_client: Any):
         self.ig_client = ig_client
+        self.last_thread_id: Optional[str] = None
+        self.last_cursor: Optional[str] = None
+        self.last_hit_anchor: bool = False
 
     def get_self_id(self) -> str:
         """取得主帳號的 Instagram PK。"""
@@ -56,18 +59,34 @@ class InstagramAdapter(BaseSourceAdapter):
         amount: int = 0,
         progress_callback: Optional[Any] = None,
         stop_item_ids: Optional[Any] = None,
+        start_cursor: Optional[str] = None,
+        thread_id: Optional[str] = None,
+        truncate: bool = True,
     ) -> List[NormalizedMessage]:
-        thread = self.ig_client.get_thread_by_username(target)
-        if not thread:
-            raise ValueError(f"找不到與 {target} 的私訊對話串")
+        """start_cursor / thread_id / truncate 供背景補抓續抓使用；結束後可讀 last_* 屬性。"""
+        if not thread_id:
+            thread = self.ig_client.get_thread_by_username(target)
+            if not thread:
+                raise ValueError(f"找不到與 {target} 的私訊對話串")
+            thread_id = str(thread.id)
+        self.last_thread_id = thread_id
 
-        thread_id = str(thread.id)
+        extra = {}
+        if start_cursor:
+            extra["start_cursor"] = start_cursor
+        if not truncate:
+            extra["truncate"] = False
         raw_messages = self.ig_client.get_thread_messages(
             thread_id=thread_id,
             amount=amount,
             progress_callback=progress_callback,
             stop_item_ids=stop_item_ids,
+            **extra,
         )
+
+        cursor = getattr(self.ig_client, "last_cursor", None)
+        self.last_cursor = cursor if isinstance(cursor, str) and cursor else None
+        self.last_hit_anchor = getattr(self.ig_client, "last_hit_anchor", False) is True
 
         me_pk = self.get_self_id()
         normalized_list: List[NormalizedMessage] = []

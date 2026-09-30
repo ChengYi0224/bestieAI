@@ -66,15 +66,16 @@ class ExportHandler:
         )
         contact_id = get_row_field(contact, "id")
 
-        # 預設先執行增量同步（Auto-Sync），除非指定 -I / immediate
+        limit = max(1, cmd.limit)
+
+        # 預設先執行增量同步（Auto-Sync），除非指定 -I / immediate；只需同步 limit 則，抓夠即停
         if not cmd.immediate and self.sync_callback and target_id:
             try:
-                self.sync_callback(target_id)
+                self.sync_callback(target_id, amount=limit)
             except Exception as e:
                 logger.warning(f"自動同步訊息失敗，Fallback 使用本地既有紀錄: {e}")
 
         # 從本地 SQLite 取得最新對話
-        limit = max(1, cmd.limit)
         messages = self.message_repo.get_recent(contact_id=contact_id, limit=limit)
 
         if not messages:

@@ -217,7 +217,7 @@ def test_export_command_handling(test_env):
     res_sync = bus.dispatch(ExportCommand(limit=5, immediate=False))
     assert res_sync.success is True
     assert res_sync.data["count"] == 3
-    mock_sync.assert_called_once_with("target_user")
+    mock_sync.assert_called_once_with("target_user", amount=5)
     assert "--- 2026-09-19 ---" in res_sync.message
     assert "[10:00:00] Target: 哈囉！" in res_sync.message
 

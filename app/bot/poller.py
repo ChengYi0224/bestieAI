@@ -52,6 +52,8 @@ logger = logging.getLogger("bestieAI.bot_poller")
 
 
 class BotPoller:
+    BACKFILL_CHUNK = 100  # 背景補抓每輪抓取則數（每輪之間會釋放 IG 鎖並檢查前景任務）
+
     def __init__(
         self,
         session_manager: Optional[SessionManager] = None,
@@ -82,9 +84,16 @@ class BotPoller:
         self._task_queue: queue.Queue = queue.Queue()
         self._current_task: Optional[Dict[str, Any]] = None
         self._worker_thread: Optional[threading.Thread] = None
+        self._ig_lock = threading.Lock()
+        self._backfill_guard = threading.Lock()
+        self._backfilling: Set[str] = set()
 
-    def _sync_contact_messages(self, target_username: str) -> int:
-        """從 Instagram 同步指定對象之最新私訊至 SQLite 資料庫（不設數量上限）。"""
+    def _sync_contact_messages(self, target_username: str, amount: int = 0) -> int:
+        """從 Instagram 同步指定對象之最新私訊至 SQLite 資料庫。
+
+        amount>0 時前景只抓最新 amount 則即回傳；若尚未接上本地既有紀錄，
+        剩餘的更早歷史交由背景執行緒續抓。0 表示前景一路抓到接上本地既有紀錄。
+        """
         if not target_username:
             return 0
         try:
@@ -95,18 +104,77 @@ class BotPoller:
             contact_id = get_or_create_contact(ig_account_id=target_username, display_name=target_username)
             existing_ids = get_latest_item_ids(contact_id=contact_id, limit=50)
             adapter = SourceAdapterFactory.create("instagram", ig_client=self.main_ig)
-            normalized_msgs = adapter.fetch_messages(target=target_username, amount=0, stop_item_ids=existing_ids)
-            processed_msgs = [
-                {"ig_item_id": m.external_id, "sender": m.sender, "content": m.content, "sent_at": m.sent_at}
-                for m in normalized_msgs
-            ]
-            inserted = save_messages(contact_id=contact_id, messages=processed_msgs)
+            fetch_kwargs = {"target": target_username, "amount": amount, "stop_item_ids": existing_ids}
+            if amount:
+                fetch_kwargs["truncate"] = False  # 保留整頁結果，避免與背景續抓的 cursor 之間出現斷層
+            with self._ig_lock:
+                normalized_msgs = adapter.fetch_messages(**fetch_kwargs)
+            inserted = save_messages(contact_id=contact_id, messages=self._to_db_rows(normalized_msgs))
             logger.info(f"Auto-Sync 完成：{target_username} 獲取 {len(normalized_msgs)} 則，新增 {inserted} 則私訊。")
+
+            cursor = getattr(adapter, "last_cursor", None)
+            thread_id = getattr(adapter, "last_thread_id", None)
+            if (
+                amount
+                and isinstance(cursor, str) and cursor
+                and isinstance(thread_id, str) and thread_id
+                and getattr(adapter, "last_hit_anchor", False) is not True
+            ):
+                self._start_backfill(target_username, contact_id, thread_id, cursor, existing_ids)
             return inserted
         except Exception as e:
             logger.warning(f"Auto-Sync 同步 {target_username} 失敗 ({e})，Fallback 使用資料庫現有紀錄。")
             log_error(e, context=f"BotPoller._sync_contact_messages — {target_username}", logger_name="bestieAI.bot_poller")
             return 0
+
+    @staticmethod
+    def _to_db_rows(normalized_msgs) -> List[Dict[str, Any]]:
+        return [
+            {"ig_item_id": m.external_id, "sender": m.sender, "content": m.content, "sent_at": m.sent_at}
+            for m in normalized_msgs
+        ]
+
+    def _start_backfill(self, target: str, contact_id: int, thread_id: str, cursor: str, anchor_ids: Set[str]) -> None:
+        """啟動背景執行緒，從 cursor 往更早的歷史續抓，直到接上本地既有紀錄或抓完為止。"""
+        with self._backfill_guard:
+            if target in self._backfilling:
+                return
+            self._backfilling.add(target)
+        threading.Thread(
+            target=self._backfill_worker,
+            args=(target, contact_id, thread_id, cursor, anchor_ids),
+            daemon=True,
+        ).start()
+        logger.info(f"背景補抓已啟動：{target}")
+
+    def _backfill_worker(self, target: str, contact_id: int, thread_id: str, cursor: Optional[str], anchor_ids: Set[str]) -> None:
+        from app.storage.db import save_messages
+        total = 0
+        try:
+            while cursor:
+                # 讓出 IG 連線給前景任務，避免同時打 API 觸發風控
+                while self._current_task is not None or not self._task_queue.empty():
+                    time.sleep(5.0)
+                adapter = SourceAdapterFactory.create("instagram", ig_client=self.main_ig)
+                with self._ig_lock:
+                    msgs = adapter.fetch_messages(
+                        target=target,
+                        amount=self.BACKFILL_CHUNK,
+                        stop_item_ids=anchor_ids,
+                        start_cursor=cursor,
+                        thread_id=thread_id,
+                        truncate=False,
+                    )
+                total += save_messages(contact_id=contact_id, messages=self._to_db_rows(msgs))
+                nxt = getattr(adapter, "last_cursor", None)
+                cursor = nxt if isinstance(nxt, str) and nxt else None
+            logger.info(f"背景補抓完成：{target} 共補入 {total} 則。")
+        except Exception as e:
+            logger.warning(f"背景補抓 {target} 中斷（已補入 {total} 則）: {e}")
+            log_error(e, context=f"BotPoller._backfill_worker — {target}", logger_name="bestieAI.bot_poller")
+        finally:
+            with self._backfill_guard:
+                self._backfilling.discard(target)
 
     def _resolve_main_pk(self) -> None:
         """動態取得主帳號的 Instagram PK (User ID)。"""

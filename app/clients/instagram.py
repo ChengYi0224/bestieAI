@@ -85,6 +85,8 @@ class IGClient:
         self.client = client
         self.min_delay = min_delay
         self.max_delay = max_delay
+        self.last_cursor: Optional[str] = None
+        self.last_hit_anchor: bool = False
 
     def _sleep_jitter(self) -> None:
         time.sleep(random.uniform(self.min_delay, self.max_delay))
@@ -162,14 +164,25 @@ class IGClient:
         batch_rest_seconds: float = 25.0,
         progress_callback: Optional[Callable[[int, int], None]] = None,
         stop_item_ids: Optional[Union[str, Collection[str]]] = None,
+        start_cursor: Optional[str] = None,
+        truncate: bool = True,
     ) -> List[DirectMessage]:
+        """分頁撈取對話串訊息（由新到舊）。
+
+        start_cursor: 從指定 cursor 續抓更早的訊息（背景補抓用）。
+        truncate: False 時不裁切超出 amount 的整頁結果，確保 last_cursor 與回傳內容無斷層。
+        結束後 self.last_cursor 為可續抓的 cursor（None 表示已抓完或已接上既有紀錄），
+        self.last_hit_anchor 表示是否已遇到 stop_item_ids 中的既有訊息。
+        """
         params = {
             "visual_message_return_type": "unseen",
             "direction": "older",
             "seq_id": "40065",
             "limit": "20",
         }
-        cursor = None
+        cursor = start_cursor
+        self.last_cursor = None
+        self.last_hit_anchor = False
         items = []
         page = 0
 
@@ -216,6 +229,7 @@ class IGClient:
                 items.append(item)
 
             if stop_reached:
+                self.last_hit_anchor = True
                 break
 
             cursor = thread_data.get("oldest_cursor")
@@ -231,7 +245,10 @@ class IGClient:
             if not cursor or (amount and len(items) >= amount):
                 break
 
-        if amount:
+        if not self.last_hit_anchor:
+            self.last_cursor = cursor or None
+
+        if amount and truncate:
             items = items[:amount]
 
         from instagrapi.extractors import extract_direct_message
