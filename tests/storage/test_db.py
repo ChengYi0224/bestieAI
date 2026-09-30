@@ -188,3 +188,25 @@ def test_contact_repo_requires_explicit_user_scope(tmp_path):
         repo.get_by_id(1, user_id=None)
     with pytest.raises(TypeError):
         repo.list_all(user_id=True)
+
+
+def test_init_db_adds_missing_columns_to_legacy_tables(tmp_path):
+    """舊版資料庫缺欄位時應補上；重複執行 init_db 不應出錯。"""
+    import sqlite3
+    from app.storage.db import init_db
+
+    db = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db)
+    conn.executescript("""
+        CREATE TABLE contacts (id INTEGER PRIMARY KEY AUTOINCREMENT, ig_account_id TEXT UNIQUE NOT NULL,
+                               display_name TEXT, status TEXT DEFAULT 'tracked');
+    """)
+    conn.close()
+
+    init_db(db_path=db)
+    init_db(db_path=db)  # 冪等
+
+    conn = sqlite3.connect(db)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(contacts)")}
+    conn.close()
+    assert {"nickname", "full_history_summary", "user_id"} <= cols

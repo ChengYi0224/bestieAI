@@ -41,7 +41,7 @@ from instagrapi import Client
 from instagrapi.exceptions import LoginRequired
 
 from app.core.config import settings
-from app.core.security import require_whitelist
+from app.bot.auth import require_whitelist
 from app.core.error_logger import log_error
 from app.services.session_service import SessionManager
 from app.services.ig_service import IGClient

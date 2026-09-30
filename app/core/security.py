@@ -3,7 +3,7 @@ security.py — 系統安全模組。
 
 提供：
 - Session 金鑰生成與對稱加解密 (Fernet)
-- 白名單發話者驗證裝飾器 (@require_whitelist)
+（白名單發話者驗證裝飾器 @require_whitelist 位於 app.bot.auth）
 """
 import logging
 from pathlib import Path
@@ -43,8 +43,3 @@ class SessionCipher:
     def decrypt(self, encrypted_bytes: bytes) -> bytes:
         return self.cipher.decrypt(encrypted_bytes)
 
-
-# 向後相容轉發（實際職責已拆至 app.bot.auth）
-from app.bot.auth import require_whitelist
-
-__all__ = ["SessionCipher", "require_whitelist"]

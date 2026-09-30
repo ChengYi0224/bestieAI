@@ -56,10 +56,13 @@ def init_db(db_path: Optional[Path] = None) -> None:
             ("users", "ig_session TEXT"),
         ]
         for table, col_def in migrations:
-            try:
+            # table / col_def 皆為上方寫死的常數；改以 PRAGMA 判斷欄位是否已存在，
+            # 避免用 except OperationalError 吞掉「資料庫鎖定」等真正的錯誤
+            existing_cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table});")}
+            if not existing_cols:
+                continue  # 資料表尚未建立（全新資料庫），稍後的 CREATE TABLE 已包含完整欄位
+            if col_def.split()[0] not in existing_cols:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def};")
-            except sqlite3.OperationalError:
-                pass
 
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS contacts (
