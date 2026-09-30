@@ -1,5 +1,4 @@
 import pytest
-from app.core.config import settings
 from app.storage.scope import ALL_USERS
 from pathlib import Path
 from app.storage.db import (
@@ -31,16 +30,16 @@ def test_init_db(temp_db):
     assert "bot_conversations" in tables
 
 def test_contact_and_active_state(temp_db):
-    cid = get_or_create_contact("alex_test", "Alex", db_path=temp_db)
+    cid = get_or_create_contact("alex_test", "Alex", db_path=temp_db, user_id=1)
     assert cid > 0
 
-    assert set_active_contact("alex_test", db_path=temp_db) is True
-    active = get_active_contact(db_path=temp_db)
+    assert set_active_contact("alex_test", 1, db_path=temp_db) is True
+    active = get_active_contact(1, db_path=temp_db)
     assert active is not None
     assert active["ig_account_id"] == "alex_test"
 
 def test_save_and_get_messages(temp_db):
-    cid = get_or_create_contact("alex_test", "Alex", db_path=temp_db)
+    cid = get_or_create_contact("alex_test", "Alex", db_path=temp_db, user_id=1)
     sample_msgs = [
         {"ig_item_id": "1", "sender": "them", "content": "嗨！", "sent_at": "2026-09-14T01:00:00"},
         {"ig_item_id": "2", "sender": "me", "content": "哈囉！", "sent_at": "2026-09-14T01:05:00"},
@@ -74,7 +73,7 @@ def test_should_update_summary():
 
 def test_update_contact_summary(temp_db):
     from app.storage.db import update_contact_summary, get_contact_by_id
-    cid = get_or_create_contact("alex_test", "Alex", db_path=temp_db)
+    cid = get_or_create_contact("alex_test", "Alex", db_path=temp_db, user_id=1)
     update_contact_summary(cid, "這是新的摘要卡內容", db_path=temp_db)
     contact = get_contact_by_id(cid, db_path=temp_db)
     assert contact["summary_card"] == "這是新的摘要卡內容"
@@ -84,7 +83,7 @@ def test_update_contact_summary(temp_db):
 
 def test_get_latest_item_ids(temp_db):
     from app.storage.db import get_latest_item_ids
-    cid = get_or_create_contact("stop_test", "Stop Test", db_path=temp_db)
+    cid = get_or_create_contact("stop_test", "Stop Test", db_path=temp_db, user_id=1)
     save_messages(cid, [
         {"ig_item_id": "item_101", "sender": "me", "content": "m1", "sent_at": "2026-09-19T01:00:00Z"},
         {"ig_item_id": "item_102", "sender": "them", "content": "m2", "sent_at": "2026-09-19T02:00:00Z"},
@@ -103,9 +102,9 @@ def test_contact_repository_find_and_tracked(temp_db):
     repo = ContactRepository(temp_db)
 
     # 建立多個測試聯絡人
-    c1 = repo.get_or_create("user_alpha", "Alpha Test")
+    c1 = repo.get_or_create("user_alpha", "Alpha Test", user_id=1)
     repo.set_nickname(c1, "小阿")
-    c2 = repo.get_or_create("user_beta", "Beta Test")
+    c2 = repo.get_or_create("user_beta", "Beta Test", user_id=1)
 
     # 1. 依 IG 帳號尋找（不分大小寫）
     found_id = repo.find_by_identifier("USER_ALPHA", user_id=ALL_USERS)
@@ -158,16 +157,16 @@ def test_handler_dependency_injection(temp_db):
 
     # 驗證 Handler 透過 DI 接收 Mock Repository
     contact_h = ContactHandler(contact_repo=mock_contact_repo)
-    res_list = contact_h.handle_list(ListContactsCommand())
+    res_list = contact_h.handle_list(ListContactsCommand(user_id=1))
     assert res_list.success is True
     assert "mock_user" in res_list.message
     mock_contact_repo.list_all.assert_called_once()
 
     export_h = ExportHandler(contact_repo=mock_contact_repo, message_repo=mock_msg_repo)
-    res_exp = export_h.handle_export(ExportCommand(target="mock_user", immediate=True))
+    res_exp = export_h.handle_export(ExportCommand(target="mock_user", immediate=True, user_id=1))
     assert res_exp.success is True
     assert "你好" in res_exp.message
-    mock_contact_repo.find_by_identifier.assert_called_once_with("mock_user", user_id=settings.BOT_USER_ID)
+    mock_contact_repo.find_by_identifier.assert_called_once_with("mock_user", user_id=1)
     mock_msg_repo.get_recent.assert_called_once_with(contact_id=1, limit=20)
 
 

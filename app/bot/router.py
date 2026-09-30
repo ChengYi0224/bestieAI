@@ -53,18 +53,17 @@ class CommandRouter:
         llm_client: Optional[LLMClient] = None,
         db_path: Optional[Any] = None,
         command_bus: Optional[CommandBus] = None,
-        sync_callback: Optional[Callable[[str], Any]] = None,
+        sync_callback: Optional[Callable[..., Any]] = None,
         model: Optional[str] = None,
         self_extract_model: Optional[str] = None,
     ):
         # 根組合點：只在 Router 層建立依賴，往下傳入 CommandService
-        mm = memory_manager or MemoryManager()
         lc = llm_client or LLMClient()
         self.db_path = db_path
         self.sync_callback = sync_callback
 
         self.service = CommandService(
-            memory_manager=mm,
+            memory_manager=memory_manager,
             llm_client=lc,
             db_path=self.db_path,
             sync_callback=self.sync_callback,
@@ -73,7 +72,7 @@ class CommandRouter:
         )
         self.bus = command_bus or create_default_command_bus(self.service)
 
-    def parse_text_to_command(self, raw_text: str) -> BaseCommand:
+    def parse_text_to_command(self, raw_text: str, user_id: Optional[int] = None) -> BaseCommand:
         """
         將使用者傳入的字串解析為對應領域的 Command 物件。
         委託 CommandParserRegistry 查表，自身不含 if-else。
@@ -82,27 +81,36 @@ class CommandRouter:
         text = raw_text.strip()
 
         # 純數字優先確認 pending selection
-        if text.isdigit():
-            pending_ids = get_pending_selection(db_path=self.db_path)
+        if text.isdigit() and user_id is not None:
+            pending_ids = get_pending_selection(user_id, db_path=self.db_path)
             if pending_ids:
                 from app.commands.commands import SelectChoiceCommand
                 return SelectChoiceCommand(choice_index=int(text) - 1)
 
-        return CommandParserRegistry.parse(text, db_path=self.db_path)
+        return CommandParserRegistry.parse(text, db_path=self.db_path, user_id=user_id)
 
-    def handle_message_structured(self, raw_text: str, sender_pk: Optional[str] = None) -> CommandResult:
-        """主入口：回傳具備結構化資料與文字的 CommandResult。"""
+    def handle_message_structured(
+        self,
+        raw_text: str,
+        sender_pk: Optional[str] = None,
+        user_id: Optional[int] = None,
+    ) -> CommandResult:
+        """
+        主入口：回傳具備結構化資料與文字的 CommandResult。
+        user_id 為發送者對應的租戶；None 表示尚未綁定身分，僅 help / login / 2fa 可執行。
+        """
         text = raw_text.strip()
         if not text:
             return CommandResult(success=False, message="收到空白訊息。")
 
-        cmd = self.parse_text_to_command(raw_text)
+        cmd = self.parse_text_to_command(raw_text, user_id=user_id)
+        cmd.user_id = user_id
         if sender_pk and hasattr(cmd, "sender_pk"):
             cmd.sender_pk = sender_pk
 
         return self.bus.dispatch(cmd)
 
-    def handle_message(self, raw_text: str, sender_pk: Optional[str] = None) -> str:
+    def handle_message(self, raw_text: str, sender_pk: Optional[str] = None, user_id: Optional[int] = None) -> str:
         """向後相容主入口：接收文字指令並返回供 IG 私訊傳送的字串。"""
-        res = self.handle_message_structured(raw_text, sender_pk=sender_pk)
+        res = self.handle_message_structured(raw_text, sender_pk=sender_pk, user_id=user_id)
         return res.message

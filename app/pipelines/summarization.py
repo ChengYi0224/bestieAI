@@ -16,7 +16,7 @@ from app.clients.gemini import GeminiClient
 from app.storage.db import (
     get_recent_messages,
     update_contact_summary,
-    get_active_contact,
+    get_contact_by_id,
     get_contact_events,
     should_update_summary,
 )
@@ -79,7 +79,7 @@ class Summarizer:
         db_path: Optional[Any] = None
     ) -> bool:
         """檢查特定聯絡人累積未彙總訊息數，達標或強制時更新人物摘要卡。"""
-        contact_row = get_active_contact(contact_id=contact_id, db_path=db_path)
+        contact_row = get_contact_by_id(contact_id, db_path=db_path)
         if not contact_row:
             return False
 

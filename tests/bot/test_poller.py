@@ -5,6 +5,13 @@ from instagrapi.realtime import RealtimeClient
 from app.bot.poller import BotPoller
 from app.services.ig_service import IGClient
 
+def _unbound_user_repo():
+    """沒有任何已綁定 IG 帳號的 UserRepository 替身（避免測試碰觸真實資料庫）。"""
+    repo = MagicMock()
+    repo.get_by_ig_pk.return_value = None
+    return repo
+
+
 def test_poller_setup_realtime_contract():
     """驗證 BotPoller._setup_realtime 呼叫的函式真實存在於 instagrapi.Client 與 RealtimeClient"""
     client = Client()
@@ -57,7 +64,7 @@ def test_poller_realtime_message_processing():
     poller._on_realtime_message(event_payload)
 
     # 驗證 router 接收到正確指令與發訊者 PK
-    mock_router.handle_message_structured.assert_called_with("help", sender_pk="22222")
+    mock_router.handle_message_structured.assert_called_with("help", sender_pk="22222", user_id=1)
     # 驗證發送回覆至正確的 thread
     mock_ig.send_message.assert_called_with("thread_abc_123", "測試回覆")
 
@@ -84,7 +91,7 @@ def test_poller_ignores_own_bot_messages():
 def test_poller_blocks_unauthorized_users():
     """驗證非主帳號白名單之外部私訊會被 @require_whitelist 靜默攔截拋棄"""
     mock_router = MagicMock()
-    poller = BotPoller(router=mock_router)
+    poller = BotPoller(router=mock_router, user_repo=_unbound_user_repo())
     poller.allowed_main_pk = "99999"  # 僅允許主帳號
     poller.bot_client = Client()
     poller.bot_client.authorization_data = {"ds_user_id": "11111"}
@@ -109,6 +116,8 @@ def test_poller_blocks_unauthorized_users():
 
 def test_poller_queue_boundaries():
     """驗證全量爬取工作隊列邊界防護：重複請求拒絕、不同對象進排程"""
+    from unittest.mock import patch
+    from app.bot.task_worker import Task
     from app.commands.base import CommandResult
     mock_router = MagicMock()
     poller = BotPoller(router=mock_router)
@@ -116,19 +125,22 @@ def test_poller_queue_boundaries():
     poller.bot_client = Client()
     mock_ig = MagicMock(spec=IGClient)
     poller.bot_ig = mock_ig
+    poller.worker.start = MagicMock()  # 不啟動真實 Worker 執行緒
 
     # 模擬任務 A 正在執行中
-    poller._current_task = {"target": "user_a", "max_amount": 1000, "thread_id": "t1"}
+    poller.worker._current = Task(user_id=1, target="user_a", max_amount=1000, thread_id="t1")
 
     # 1. 收到相同對象 user_a 的 track_full → 直接拒絕並提示進度
     mock_router.handle_message_structured.return_value = CommandResult(
         success=True, message="", action_type="TRACK_FULL_REQUEST",
         data={"target": "user_a", "max_amount": 1000}
     )
-    poller._process_message("t1", "22222", "item_1", "track_full user_a")
+    with patch("app.storage.db.get_worker_status", return_value={"pages": 3, "count": 60}):
+        poller._process_message("t1", "22222", "item_1", "track_full user_a")
     mock_ig.send_message.assert_called()
     args, _ = mock_ig.send_message.call_args
     assert "已有相同任務進行中" in args[1]
+    assert "第 3 頁 / 60 則" in args[1]
 
     # 2. 收到不同對象 user_b 的 track_full → 排入隊列
     mock_router.handle_message_structured.return_value = CommandResult(
@@ -136,7 +148,7 @@ def test_poller_queue_boundaries():
         data={"target": "user_b", "max_amount": 1000}
     )
     poller._process_message("t1", "22222", "item_2", "track_full user_b")
-    assert "user_b" in poller._get_queued_targets()
+    assert "user_b" in poller.worker.queued_targets(1)
     args, _ = mock_ig.send_message.call_args
     assert "已將 user_b 加入排程" in args[1]
 
@@ -147,12 +159,13 @@ def test_poller_queue_boundaries():
 
 
 def test_poller_sync_contact_messages(monkeypatch):
-    """驗證 BotPoller._sync_contact_messages 以 amount=0 呼叫 adapter 並寫入訊息至資料庫。"""
+    """驗證 _sync_contact_messages 以該使用者自己的 IG 連線、amount=0 呼叫 adapter 並寫入訊息至資料庫。"""
     from unittest.mock import patch
     from app.sources.base import NormalizedMessage
 
     poller = BotPoller(router=MagicMock())
-    poller.main_ig = MagicMock()
+    user_ig = MagicMock()
+    poller.ig_pool.prime(1, user_ig)
 
     mock_msgs = [
         NormalizedMessage(
@@ -167,17 +180,14 @@ def test_poller_sync_contact_messages(monkeypatch):
     mock_adapter = MagicMock()
     mock_adapter.fetch_messages.return_value = mock_msgs
 
-    with patch("app.sources.SourceAdapterFactory.create", return_value=mock_adapter) as mock_factory, \
-         patch("app.storage.db.get_or_create_contact", return_value=42) as mock_get_contact, \
-         patch("app.storage.db.get_latest_item_ids", return_value={"ext_known"}) as mock_get_ids, \
-         patch("app.storage.db.save_messages", return_value=1) as mock_save:
+    with patch("app.sources.SourceAdapterFactory.create", return_value=mock_adapter) as mock_factory,          patch("app.storage.db.get_or_create_contact", return_value=42) as mock_get_contact,          patch("app.storage.db.get_latest_item_ids", return_value={"ext_known"}) as mock_get_ids,          patch("app.storage.db.save_messages", return_value=1) as mock_save:
 
-        inserted = poller._sync_contact_messages("target_u")
+        inserted = poller._sync_contact_messages("target_u", user_id=1)
 
         assert inserted == 1
-        mock_factory.assert_called_once_with("instagram", ig_client=poller.main_ig)
+        mock_factory.assert_called_once_with("instagram", ig_client=user_ig)
         mock_adapter.fetch_messages.assert_called_once_with(target="target_u", amount=0, stop_item_ids={"ext_known"})
-        mock_get_contact.assert_called_once_with(ig_account_id="target_u", display_name="target_u")
+        mock_get_contact.assert_called_once_with(ig_account_id="target_u", display_name="target_u", user_id=1)
         mock_save.assert_called_once_with(
             contact_id=42,
             messages=[{
@@ -187,4 +197,3 @@ def test_poller_sync_contact_messages(monkeypatch):
                 "sent_at": "2026-09-19T00:00:00Z"
             }]
         )
-

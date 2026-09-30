@@ -105,6 +105,7 @@ class AuthHandler:
             return CommandResult(
                 success=True,
                 message=f"✅ IG 帳號 @{ig_username} 登入成功！已完成身分綁定。",
+                action_type="LOGIN_COMPLETED",
                 data={"user_id": user_id, "ig_username": ig_username, "ig_pk": target_pk},
             )
         except Exception as e:

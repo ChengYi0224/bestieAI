@@ -39,13 +39,28 @@ Schemas (app/api/schemas/)                → Pydantic 模型，禁止業務邏�
 3. **新增 API 功能時**，若需要業務邏輯，在 `app/services/` 新增專用 Service，不直接改動現有 Service。
 4. **新增 Repository 方法**時，繼承 `BaseRepository`，使用 `@with_connection` decorator。
 5. **禁止在任何層新增 `get_connection()` 的直接呼叫**，一律透過 Repository。
-6. **租戶隔離**：`ContactRepository` 的查詢方法 `user_id` 是 keyword-only 必填。
+6. **租戶隔離**：`ContactRepository` 的查詢方法 `user_id` 是 keyword-only 必填；`BotStateRepository` 與 `db.py` 的狀態函式也一律要帶 `user_id`。
    - API / Service 一律傳登入使用者的 `user_id`。
-   - IG Bot 指令用 `settings.BOT_USER_ID`。
+   - IG Bot 的指令由 `BotPoller` 依發送者解析出 `user_id`（`SenderResolver`），放在 `BaseCommand.user_id`；Handler 以 `need_user(cmd)` 取得，不要自行猜測或使用預設值。
    - 只有背景排程 / 內部管線可傳 `ALL_USERS`（`app.storage.scope`），且要寫註解說明原因。
    - 禁止為了讓呼叫通過而傳 `None` 或加預設值。
 7. **禁止 `except Exception: pass`**：至少要 `logger.warning/debug`。進度回報用 `app.utils.progress.notify_progress`。
-8. **共用的 IG 連線只能透過 `BotPoller._get_main_ig()` 取得**，不要自行 `session_manager.login("main")`。
+8. **IG 連線只能透過 `IGClientPool.get(user_id)` 取得**（`app/services/ig_pool.py`）：擁有者用 .env 主帳號，其他使用者用自己綁定的 session，絕不借用他人帳號。不要自行 `session_manager.login("main")`。
+9. **記憶 / 向量庫 / IngestionPipeline 依使用者取得**：用 `MemoryManagerPool.for_user()`、`IngestionPipelinePool.for_user()`，不要在多用戶流程裡共用單一實例。
+10. **Bot 的背景狀態（作用對象、待選清單、背景進度、對話）存在 `bot_user_state` / `bot_conversations.user_id`**，不得再使用全域單例。
+
+## Bot 結構（`app/bot/`）
+
+| 模組 | 職責 |
+|---|---|
+| `poller.py` | 編排層：MQTT 迴圈、身分解析、指令派發 |
+| `identity.py` | 發送者 IG PK → `user_id`（主帳號 = `OWNER_USER_ID`，其餘查 `users.ig_pk`） |
+| `dispatcher.py` | `action_type` → 實際動作（track / sync / 復盤 / 重建向量…） |
+| `task_worker.py` | `track_full` 的全域佇列與單一 worker（任務帶 `user_id`） |
+| `sync_service.py` | 私訊增量同步與背景補抓 |
+| `realtime.py` / `activity.py` / `worker_status.py` | 事件解析 / 活動追蹤 / 每用戶進度寫入 |
+
+未綁定身分的發送者只能用 `help` / `login` / `2fa`（`CommandBus` 會擋下其他指令）。
 
 ## 安全與設定
 

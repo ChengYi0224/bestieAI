@@ -16,10 +16,10 @@ class StatusApiService:
         self.bot_state_repo = bot_state_repo
         self.contact_repo = contact_repo or ContactRepository()
 
-    def get_system_status(self) -> dict[str, Any]:
-        """彙整系統健康狀況、Worker 狀態與活躍聯絡人。"""
-        worker_status = self.bot_state_repo.get_worker_status()
-        active_contact = self.contact_repo.get_active()
+    def get_system_status(self, user_id: int) -> dict[str, Any]:
+        """彙整系統健康狀況，以及該使用者自己的 Worker 狀態與活躍聯絡人。"""
+        worker_status = self.bot_state_repo.get_worker_status(user_id=user_id)
+        active_contact = self.contact_repo.get_active(user_id=user_id)
         active_contact_id = active_contact["id"] if active_contact else None
 
         return {

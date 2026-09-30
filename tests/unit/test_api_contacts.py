@@ -38,8 +38,8 @@ def test_list_contacts_empty_and_populated(test_setup):
     assert res.status_code == 200
     assert res.json() == []
 
-    c1 = contact_repo.get_or_create("user_one", "User One")
-    c2 = contact_repo.get_or_create("user_two", "User Two")
+    c1 = contact_repo.get_or_create("user_one", "User One", user_id=1)
+    c2 = contact_repo.get_or_create("user_two", "User Two", user_id=1)
 
     res = client.get("/contacts")
     assert res.status_code == 200
@@ -53,7 +53,7 @@ def test_get_contact_detail_and_not_found(test_setup):
     """驗證取得單一聯絡人詳情與 404 錯誤處理。"""
     client, contact_repo, _ = test_setup
 
-    c_id = contact_repo.get_or_create("alice", "Alice")
+    c_id = contact_repo.get_or_create("alice", "Alice", user_id=1)
 
     res = client.get(f"/contacts/{c_id}")
     assert res.status_code == 200
@@ -70,7 +70,7 @@ def test_patch_contact(test_setup):
     """驗證更新聯絡人暱稱與備註。"""
     client, contact_repo, _ = test_setup
 
-    c_id = contact_repo.get_or_create("bob", "Bob")
+    c_id = contact_repo.get_or_create("bob", "Bob", user_id=1)
 
     # 更新 nickname 與 relationship_note
     res = client.patch(
@@ -98,7 +98,7 @@ def test_get_contact_events(test_setup):
     """驗證取得指定聯絡人記憶事件。"""
     client, contact_repo, event_repo = test_setup
 
-    c_id = contact_repo.get_or_create("charlie", "Charlie")
+    c_id = contact_repo.get_or_create("charlie", "Charlie", user_id=1)
     event_repo.save_events(
         c_id,
         [

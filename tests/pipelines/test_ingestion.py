@@ -32,7 +32,7 @@ def test_check_and_update_summary(tmp_path):
     mock_vector = MagicMock()
 
     pipeline = IngestionPipeline(vector_store=mock_vector, llm_client=mock_llm)
-    cid = get_or_create_contact("alex_test", "Alex", db_path=db_file)
+    cid = get_or_create_contact("alex_test", "Alex", db_path=db_file, user_id=1)
 
     # 1. 訊息少且未達門檻，不強制更新
     save_messages(cid, [{"ig_item_id": "1", "sender": "them", "content": "hi", "sent_at": "2026-09-14T00:00:00"}], db_path=db_file)
@@ -62,7 +62,7 @@ def test_summarizer_check_and_update_summary(tmp_path):
 
     db_file = tmp_path / "test_summarizer.db"
     init_db(db_file)
-    cid = get_or_create_contact("bob_test", "Bob", db_path=db_file)
+    cid = get_or_create_contact("bob_test", "Bob", db_path=db_file, user_id=1)
 
     save_messages(cid, [{"ig_item_id": "m1", "sender": "them", "content": "hello there", "sent_at": "2026-09-19T12:00:00"}], db_path=db_file)
 
@@ -105,7 +105,7 @@ def test_rebuild_vectors(tmp_path):
     mock_llm = MagicMock()
     pipeline = IngestionPipeline(vector_store=mock_vector, llm_client=mock_llm)
 
-    cid = get_or_create_contact("bob_rebuild", "Bob", db_path=db_file)
+    cid = get_or_create_contact("bob_rebuild", "Bob", db_path=db_file, user_id=1)
     save_messages(cid, [
         {"ig_item_id": "r1", "sender": "them", "content": "你好", "sent_at": "2026-09-13T10:00:00"},
         {"ig_item_id": "r2", "sender": "me",   "content": "嗨",   "sent_at": "2026-09-13T10:01:00"},
@@ -135,7 +135,7 @@ def test_run_full_ingestion_deduplication(tmp_path):
     mock_llm.generate_summary.return_value = "全局摘要卡"
     pipeline = IngestionPipeline(vector_store=mock_vector, llm_client=mock_llm)
 
-    cid = get_or_create_contact("charlie_full", "Charlie", db_path=db_file)
+    cid = get_or_create_contact("charlie_full", "Charlie", db_path=db_file, user_id=1)
     # 先在本地存有 2 則訊息 (item_id: "m1", "m2")
     save_messages(cid, [
         {"ig_item_id": "m1", "sender": "them", "content": "舊訊息1", "sent_at": "2026-09-01T10:00:00"},
@@ -179,7 +179,7 @@ def test_build_full_history_summary(tmp_path):
     mock_llm.generate_full_history_summary.return_value = "深度全景復盤卡內容"
     pipeline = IngestionPipeline(llm_client=mock_llm)
 
-    cid = get_or_create_contact("diana_test", "Diana", db_path=db_file)
+    cid = get_or_create_contact("diana_test", "Diana", db_path=db_file, user_id=1)
     save_messages(cid, [
         {"ig_item_id": "d1", "sender": "them", "content": "第一天相識", "sent_at": "2026-07-01T10:00:00"},
         {"ig_item_id": "d2", "sender": "me",   "content": "好巧喔",   "sent_at": "2026-07-01T10:05:00"},

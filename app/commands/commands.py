@@ -5,7 +5,7 @@ commands.py — 所有領域命令（Command）的 Dataclass 定義（純 DTO �
 每個 Command 對應一個可被 CommandBus 派發的操作意圖。
 """
 from dataclasses import dataclass
-from typing import Optional
+from typing import ClassVar, Optional
 from app.core.config import settings
 from app.commands.base import BaseCommand
 
@@ -13,6 +13,7 @@ from app.commands.base import BaseCommand
 # ─── 使用說明 ───────────────────────────────────────────
 @dataclass
 class HelpCommand(BaseCommand):
+    requires_user: ClassVar[bool] = False
     show_all: bool = False
 
 # ─── 聯絡人管理 ──────────────────────────────────────────
@@ -101,11 +102,13 @@ class CheckUnfollowersCommand(BaseCommand):
 # ─── 身分驗證與帳號綁定 ─────────────────────────────────────
 @dataclass
 class LoginCommand(BaseCommand):
+    requires_user: ClassVar[bool] = False
     ig_username: str
     ig_password: str
     sender_pk: Optional[str] = None
 
 @dataclass
 class TwoFactorCommand(BaseCommand):
+    requires_user: ClassVar[bool] = False
     code: str
     sender_pk: Optional[str] = None

@@ -33,7 +33,7 @@ def test_get_messages_pagination_and_headers(test_setup):
     """驗證訊息分頁查詢與 X-Total-Count 標頭。"""
     client, contact_repo, message_repo = test_setup
 
-    c_id = contact_repo.get_or_create("diana", "Diana")
+    c_id = contact_repo.get_or_create("diana", "Diana", user_id=1)
 
     messages = [
         {"ig_item_id": f"msg_{i}", "sender": "diana" if i % 2 == 0 else "me", "content": f"Hello {i}", "sent_at": f"2026-03-01T10:0{i}:00Z"}

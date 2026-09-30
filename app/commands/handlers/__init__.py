@@ -8,7 +8,7 @@ CommandService 是向後相容的薄層 Facade：
 """
 from typing import Any, Optional, Callable
 
-from app.services.memory_service import MemoryManager
+from app.services.memory_service import MemoryManager, MemoryManagerPool
 from app.services.llm_service import LLMClient
 from app.commands.handlers.help import HelpHandler
 from app.commands.handlers.contact import ContactHandler
@@ -62,7 +62,7 @@ class CommandService:
         memory_manager: Optional[MemoryManager] = None,
         llm_client: Optional[LLMClient] = None,
         db_path: Optional[Any] = None,
-        sync_callback: Optional[Callable[[str], Any]] = None,
+        sync_callback: Optional[Callable[..., Any]] = None,
         model: Optional[str] = None,
         self_extract_model: Optional[str] = None,
         contact_repo: Optional[ContactRepository] = None,
@@ -71,7 +71,7 @@ class CommandService:
         user_repo: Optional[UserRepository] = None,
     ):
         # 根組合點：在此建立或接收 Repositories，以 DI 注入子 Handler
-        mm = memory_manager or MemoryManager()
+        pool = MemoryManagerPool(override=memory_manager, db_path=db_path)
         lc = llm_client or LLMClient()
         cr = contact_repo or ContactRepository(db_path)
         mr = message_repo or MessageRepository(db_path)
@@ -80,9 +80,9 @@ class CommandService:
 
         self._help = HelpHandler()
         self._contact = ContactHandler(contact_repo=cr, bot_state_repo=bsr)
-        self._memory = MemoryHandler(memory_manager=mm, contact_repo=cr)
+        self._memory = MemoryHandler(memory_pool=pool, contact_repo=cr)
         self._chat = ChatHandler(
-            memory_manager=mm,
+            memory_pool=pool,
             llm_client=lc,
             contact_repo=cr,
             bot_state_repo=bsr,
@@ -99,7 +99,8 @@ class CommandService:
         self._auth = AuthHandler(user_repo=ur)
 
         # 向後相容屬性
-        self.memory_manager = mm
+        self.memory_pool = pool
+        self.memory_manager = memory_manager  # 僅測試注入時有值；正式流程請用 memory_pool.for_user()
         self.llm_client = lc
         self.db_path = db_path
         self.contact_repo = cr

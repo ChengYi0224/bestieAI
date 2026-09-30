@@ -20,9 +20,8 @@ PIPELINE (L2):
 import logging
 from typing import Any, Optional, Callable
 
-from app.commands.base import CommandResult, SYNC_FAILED
+from app.commands.base import CommandResult, SYNC_FAILED, need_user
 from app.commands.commands import ExportCommand
-from app.core.config import settings
 from app.storage.repositories import ContactRepository, MessageRepository
 from app.utils.db import row_to_dict, get_row_field
 from app.utils.text import format_chat_messages
@@ -46,10 +45,11 @@ class ExportHandler:
         self.sync_callback = sync_callback
 
     def handle_export(self, cmd: ExportCommand) -> CommandResult:
+        uid = need_user(cmd)
         contact = (
-            self.contact_repo.find_by_identifier(cmd.target, user_id=settings.BOT_USER_ID)
+            self.contact_repo.find_by_identifier(cmd.target, user_id=uid)
             if cmd.target
-            else self.contact_repo.get_active()
+            else self.contact_repo.get_active(user_id=uid)
         )
 
 
@@ -73,7 +73,7 @@ class ExportHandler:
         sync_failed = False
         if not cmd.immediate and self.sync_callback and target_id:
             try:
-                sync_failed = self.sync_callback(target_id, amount=limit) == SYNC_FAILED
+                sync_failed = self.sync_callback(target_id, amount=limit, user_id=uid) == SYNC_FAILED
             except Exception as e:
                 sync_failed = True
                 logger.warning(f"自動同步訊息失敗，Fallback 使用本地既有紀錄: {e}")

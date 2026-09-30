@@ -4,6 +4,7 @@ import pytest
 from instagrapi.exceptions import TwoFactorRequired, BadPassword
 
 from app.bot.auth import require_whitelist
+from app.bot.identity import SenderResolver
 from app.commands.commands import LoginCommand, TwoFactorCommand
 from app.commands.handlers.auth import AuthHandler
 from app.commands.parsers import CommandParserRegistry
@@ -95,6 +96,7 @@ def test_require_whitelist_behavior(tmp_path):
             self.allowed_main_pk = "main_pk"
             self.bot_client = MagicMock(user_id="bot_pk")
             self.db_path = db_path
+            self.resolver = SenderResolver(lambda: self.allowed_main_pk, user_repo)
 
         @require_whitelist
         def process(self, thread_id, user_id, item_id, text):

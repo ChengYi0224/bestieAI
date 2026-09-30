@@ -62,7 +62,7 @@ def test_command_bus_dispatch_track(test_env):
 def test_command_bus_dispatch_select(test_env):
     bus = test_env["bus"]
     db_file = test_env["db_file"]
-    get_or_create_contact("alice_dev", "Alice", db_path=db_file)
+    get_or_create_contact("alice_dev", "Alice", db_path=db_file, user_id=1)
 
     # 查無對象
     res_not_found = bus.dispatch(SelectCommand(query="non_existent"))
@@ -79,8 +79,8 @@ def test_command_bus_dispatch_select(test_env):
 def test_command_bus_dispatch_list_and_status(test_env):
     bus = test_env["bus"]
     db_file = test_env["db_file"]
-    get_or_create_contact("bob_smith", "Bob", db_path=db_file)
-    set_active_contact("bob_smith", db_path=db_file)
+    get_or_create_contact("bob_smith", "Bob", db_path=db_file, user_id=1)
+    set_active_contact("bob_smith", 1, db_path=db_file)
 
     res_list = bus.dispatch(ListContactsCommand())
     assert res_list.success is True
@@ -192,8 +192,8 @@ def test_export_command_handling(test_env):
     assert "尚未選定作用對象" in res_no_contact.message
 
     # 2. 建立聯絡人並寫入訊息
-    cid = get_or_create_contact("target_user", "Target", db_path=db_file)
-    set_active_contact("target_user", db_path=db_file)
+    cid = get_or_create_contact("target_user", "Target", db_path=db_file, user_id=1)
+    set_active_contact("target_user", 1, db_path=db_file)
 
     save_messages(cid, [
         {"ig_item_id": "m1", "sender": "them", "content": "哈囉！", "sent_at": "2026-09-19T10:00:00"},
@@ -217,7 +217,7 @@ def test_export_command_handling(test_env):
     res_sync = bus.dispatch(ExportCommand(limit=5, immediate=False))
     assert res_sync.success is True
     assert res_sync.data["count"] == 3
-    mock_sync.assert_called_once_with("target_user", amount=5)
+    mock_sync.assert_called_once_with("target_user", amount=5, user_id=1)
     assert "--- 2026-09-19 ---" in res_sync.message
     assert "[10:00:00] Target: 哈囉！" in res_sync.message
 
@@ -245,12 +245,12 @@ def test_export_reports_sync_failure(test_env):
     from app.storage.db import get_or_create_contact, set_active_contact, save_messages
     bus = test_env["bus"]
     db_file = test_env["db_file"]
-    cid = get_or_create_contact("target_user", "Target", db_path=db_file)
-    set_active_contact("target_user", db_path=db_file)
+    cid = get_or_create_contact("target_user", "Target", db_path=db_file, user_id=1)
+    set_active_contact("target_user", 1, db_path=db_file)
     save_messages(cid, [
         {"ig_item_id": "m1", "sender": "them", "content": "哈囉！", "sent_at": "2026-09-19T10:00:00"},
     ], db_path=db_file)
-    test_env["service"]._export.sync_callback = lambda target, amount=0: SYNC_FAILED
+    test_env["service"]._export.sync_callback = lambda target, amount=0, user_id=None: SYNC_FAILED
     res = bus.dispatch(ExportCommand(limit=5, immediate=False))
     assert res.success is True
     assert res.data["sync_failed"] is True

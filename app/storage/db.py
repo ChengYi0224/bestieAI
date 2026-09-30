@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 from app.core.config import settings
 from app.storage.scope import ALL_USERS, UserScope
+from app.storage.migrations import (
+    CONTACTS_DDL, MESSAGES_DDL, apply_multi_tenant_migrations,
+)
 
 logger = logging.getLogger("bestieAI.storage.db")
 
@@ -64,34 +67,8 @@ def init_db(db_path: Optional[Path] = None) -> None:
             if col_def.split()[0] not in existing_cols:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def};")
 
-        conn.executescript("""
-        CREATE TABLE IF NOT EXISTS contacts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER DEFAULT 1 REFERENCES users(id) ON DELETE CASCADE,
-            ig_account_id TEXT UNIQUE NOT NULL,
-            display_name TEXT,
-            nickname TEXT,
-            relationship_note TEXT,
-            status TEXT DEFAULT 'tracked',
-            summary_card TEXT,
-            summary_updated_at DATETIME,
-            full_history_summary TEXT,
-            full_history_updated_at DATETIME,
-            new_messages_since_summary INTEGER DEFAULT 0,
-            last_synced_at DATETIME
-        );
-
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            contact_id INTEGER NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
-            ig_item_id TEXT UNIQUE NOT NULL,
-            sender TEXT NOT NULL,
-            content TEXT NOT NULL,
-            sent_at DATETIME NOT NULL,
-            ingested_to_vector_store BOOLEAN DEFAULT 0,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
-
+        conn.executescript(
+            CONTACTS_DDL.format(name="contacts") + MESSAGES_DDL.format(name="messages") + """
         CREATE TABLE IF NOT EXISTS bot_state (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             active_contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
@@ -102,6 +79,7 @@ def init_db(db_path: Optional[Path] = None) -> None:
 
         CREATE TABLE IF NOT EXISTS bot_conversations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER DEFAULT 1,
             contact_id INTEGER REFERENCES contacts(id) ON DELETE SET NULL,
             role TEXT NOT NULL,
             content TEXT NOT NULL,
@@ -140,27 +118,26 @@ def init_db(db_path: Optional[Path] = None) -> None:
 
         # 補正既有 contacts 的 user_id 為 1
         conn.execute("UPDATE contacts SET user_id = 1 WHERE user_id IS NULL;")
+    apply_multi_tenant_migrations(conn)
     conn.close()
 
 
 # ==================== 模組層相容輔助函式（底層轉接 Repositories） ====================
 
-def get_active_contact(contact_id: Optional[int] = None, db_path: Optional[Path] = None) -> Optional[sqlite3.Row]:
+def get_active_contact(user_id: int, db_path: Optional[Path] = None) -> Optional[sqlite3.Row]:
+    """取得指定使用者目前的作用對象。"""
     from app.storage.repositories import ContactRepository
-    repo = ContactRepository(db_path)
-    if contact_id is not None:
-        return repo.get_by_id(contact_id, user_id=ALL_USERS)
-    return repo.get_active()
+    return ContactRepository(db_path).get_active(user_id=user_id)
 
 
-def set_active_contact_by_id(contact_id: int, db_path: Optional[Path] = None) -> bool:
+def set_active_contact_by_id(contact_id: int, user_id: int, db_path: Optional[Path] = None) -> bool:
     from app.storage.repositories import ContactRepository
-    return ContactRepository(db_path).set_active_by_id(contact_id)
+    return ContactRepository(db_path).set_active_by_id(contact_id, user_id=user_id)
 
 
-def set_active_contact(ig_account_id: str, db_path: Optional[Path] = None) -> bool:
+def set_active_contact(ig_account_id: str, user_id: int, db_path: Optional[Path] = None) -> bool:
     from app.storage.repositories import ContactRepository
-    return ContactRepository(db_path).set_active(ig_account_id)
+    return ContactRepository(db_path).set_active(ig_account_id, user_id=user_id)
 
 
 def search_contacts_fuzzy(query: str, user_id: UserScope, db_path: Optional[Path] = None) -> List[sqlite3.Row]:
@@ -168,33 +145,35 @@ def search_contacts_fuzzy(query: str, user_id: UserScope, db_path: Optional[Path
     return ContactRepository(db_path).search_fuzzy(query, user_id=user_id)
 
 
-def set_pending_selection(candidate_ids: List[int], db_path: Optional[Path] = None) -> None:
+def set_pending_selection(candidate_ids: List[int], user_id: int, db_path: Optional[Path] = None) -> None:
     from app.storage.repositories import BotStateRepository
-    BotStateRepository(db_path).set_pending_selection(candidate_ids)
+    BotStateRepository(db_path).set_pending_selection(candidate_ids, user_id=user_id)
 
 
-def get_pending_selection(db_path: Optional[Path] = None) -> Optional[List[int]]:
+def get_pending_selection(user_id: int, db_path: Optional[Path] = None) -> Optional[List[int]]:
     from app.storage.repositories import BotStateRepository
-    return BotStateRepository(db_path).get_pending_selection()
+    return BotStateRepository(db_path).get_pending_selection(user_id=user_id)
 
 
-def set_worker_status(status_info: Optional[Dict[str, Any]], db_path: Optional[Path] = None) -> None:
+def set_worker_status(status_info: Optional[Dict[str, Any]], user_id: int, db_path: Optional[Path] = None) -> None:
     from app.storage.repositories import BotStateRepository
-    BotStateRepository(db_path).set_worker_status(status_info)
+    BotStateRepository(db_path).set_worker_status(status_info, user_id=user_id)
 
 
-def get_worker_status(db_path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+def get_worker_status(user_id: int, db_path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     from app.storage.repositories import BotStateRepository
-    return BotStateRepository(db_path).get_worker_status()
+    return BotStateRepository(db_path).get_worker_status(user_id=user_id)
 
 
 def get_or_create_contact(
     ig_account_id: str,
     display_name: Optional[str] = None,
-    db_path: Optional[Path] = None
+    db_path: Optional[Path] = None,
+    *,
+    user_id: int,
 ) -> int:
     from app.storage.repositories import ContactRepository
-    return ContactRepository(db_path).get_or_create(ig_account_id, display_name)
+    return ContactRepository(db_path).get_or_create(ig_account_id, display_name, user_id=user_id)
 
 
 def save_messages(contact_id: int, messages: List[Dict[str, Any]], db_path: Optional[Path] = None) -> int:
@@ -207,14 +186,14 @@ def get_recent_messages(contact_id: int, limit: int = 30, db_path: Optional[Path
     return MessageRepository(db_path).get_recent(contact_id, limit)
 
 
-def add_bot_conversation(role: str, content: str, contact_id: Optional[int] = None, db_path: Optional[Path] = None) -> None:
+def add_bot_conversation(role: str, content: str, user_id: int, contact_id: Optional[int] = None, db_path: Optional[Path] = None) -> None:
     from app.storage.repositories import BotStateRepository
-    BotStateRepository(db_path).add_conversation(role, content, contact_id)
+    BotStateRepository(db_path).add_conversation(role, content, contact_id, user_id=user_id)
 
 
-def get_bot_conversations(contact_id: Optional[int], limit: int = 20, db_path: Optional[Path] = None) -> List[sqlite3.Row]:
+def get_bot_conversations(contact_id: Optional[int], user_id: int, limit: int = 20, db_path: Optional[Path] = None) -> List[sqlite3.Row]:
     from app.storage.repositories import BotStateRepository
-    return BotStateRepository(db_path).get_conversations(contact_id, limit)
+    return BotStateRepository(db_path).get_conversations(contact_id, limit, user_id=user_id)
 
 
 def get_contact_by_id(contact_id: int, db_path: Optional[Path] = None) -> Optional[sqlite3.Row]:
@@ -292,9 +271,9 @@ def set_contact_nickname(contact_id: int, nickname: Optional[str], db_path: Opti
     return ContactRepository(db_path).set_nickname(contact_id, nickname)
 
 
-def get_contacts_with_nickname(db_path: Optional[Path] = None) -> List[sqlite3.Row]:
+def get_contacts_with_nickname(user_id: UserScope, db_path: Optional[Path] = None) -> List[sqlite3.Row]:
     from app.storage.repositories import ContactRepository
-    return ContactRepository(db_path).get_with_nickname()
+    return ContactRepository(db_path).get_with_nickname(user_id=user_id)
 
 
 def save_contact_events(

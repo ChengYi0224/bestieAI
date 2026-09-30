@@ -16,12 +16,11 @@ PIPELINE (L2):
 import time
 from typing import Any, Optional
 
-from app.commands.base import CommandResult
+from app.commands.base import CommandResult, need_user
 from app.commands.commands import (
     TrackCommand, TrackFullCommand, SelectCommand, SelectChoiceCommand,
     NicknameCommand, UntrackCommand, ListContactsCommand, StatusCommand,
 )
-from app.core.config import settings
 from app.storage.repositories import ContactRepository, BotStateRepository
 
 
@@ -66,6 +65,7 @@ class ContactHandler:
         )
 
     def handle_select(self, cmd: SelectCommand) -> CommandResult:
+        uid = need_user(cmd)
         query_key = cmd.query.strip()
         if not query_key:
             return CommandResult(
@@ -73,7 +73,7 @@ class ContactHandler:
                 message="格式錯誤！請提供要切換的帳號或名稱關鍵字：select <關鍵字>"
             )
 
-        matches = self.contact_repo.search_fuzzy(query_key, user_id=settings.BOT_USER_ID)
+        matches = self.contact_repo.search_fuzzy(query_key, user_id=uid)
         if not matches:
             return CommandResult(
                 success=False,
@@ -84,7 +84,7 @@ class ContactHandler:
         exact = next((m for m in matches if m["ig_account_id"].lower() == query_key.lower()), None)
         target_match = exact or (matches[0] if len(matches) == 1 else None)
         if target_match:
-            self.contact_repo.set_active_by_id(target_match["id"])
+            self.contact_repo.set_active_by_id(target_match["id"], user_id=uid)
             name_str = f"（{target_match['display_name'] or '未設定名稱'}）"
             return CommandResult(
                 success=True,
@@ -93,7 +93,7 @@ class ContactHandler:
             )
 
         candidate_ids = [m["id"] for m in matches]
-        self.bot_state_repo.set_pending_selection(candidate_ids)
+        self.bot_state_repo.set_pending_selection(candidate_ids, user_id=uid)
 
         lines = [f"找到 {len(matches)} 個符合「{query_key}」的對象，請回傳數字選擇："]
         for idx, m in enumerate(matches, 1):
@@ -107,14 +107,15 @@ class ContactHandler:
         )
 
     def handle_select_choice(self, cmd: SelectChoiceCommand) -> CommandResult:
-        pending_ids = self.bot_state_repo.get_pending_selection()
+        uid = need_user(cmd)
+        pending_ids = self.bot_state_repo.get_pending_selection(user_id=uid)
         if not pending_ids:
             return CommandResult(success=False, message="目前沒有待確認的候選對象。")
 
         if 0 <= cmd.choice_index < len(pending_ids):
             selected_id = pending_ids[cmd.choice_index]
-            self.contact_repo.set_active_by_id(selected_id)
-            target = self.contact_repo.get_by_id(selected_id, user_id=settings.BOT_USER_ID)
+            self.contact_repo.set_active_by_id(selected_id, user_id=uid)
+            target = self.contact_repo.get_by_id(selected_id, user_id=uid)
             name_str = f"（{target['display_name']}）" if target and target["display_name"] else ""
             return CommandResult(
                 success=True,
@@ -127,13 +128,14 @@ class ContactHandler:
         )
 
     def handle_nickname(self, cmd: NicknameCommand) -> CommandResult:
+        uid = need_user(cmd)
         if not cmd.nickname:
             return CommandResult(success=False, message="格式錯誤！請提供暱稱：nickname <暱稱> [IG_ID]")
 
         if cmd.target:
-            target = self.contact_repo.get_by_username(cmd.target, user_id=settings.BOT_USER_ID)
+            target = self.contact_repo.get_by_username(cmd.target, user_id=uid)
         else:
-            target = self.contact_repo.get_active()
+            target = self.contact_repo.get_active(user_id=uid)
 
         if not target:
             return CommandResult(
@@ -149,9 +151,10 @@ class ContactHandler:
         )
 
     def handle_untrack(self, cmd: UntrackCommand) -> CommandResult:
+        uid = need_user(cmd)
         if not cmd.target:
             return CommandResult(success=False, message="格式錯誤！請指定對象：untrack <IG_ID>")
-        self.contact_repo.untrack(cmd.target, user_id=settings.BOT_USER_ID)
+        self.contact_repo.untrack(cmd.target, user_id=uid)
         return CommandResult(
             success=True,
             message=f"已將 {cmd.target} 標記為停止追蹤。",
@@ -159,7 +162,7 @@ class ContactHandler:
         )
 
     def handle_list(self, cmd: ListContactsCommand) -> CommandResult:
-        rows = self.contact_repo.list_all(user_id=settings.BOT_USER_ID)
+        rows = self.contact_repo.list_all(user_id=need_user(cmd))
 
 
         if not rows:
@@ -179,7 +182,8 @@ class ContactHandler:
         return CommandResult(success=True, message="\n".join(lines), data={"contacts": contacts_data})
 
     def handle_status(self, cmd: StatusCommand) -> CommandResult:
-        w_status = self.bot_state_repo.get_worker_status()
+        uid = need_user(cmd)
+        w_status = self.bot_state_repo.get_worker_status(user_id=uid)
         worker_section = ""
         if w_status and w_status.get("running"):
             mode = w_status.get("mode", "背景任務")
@@ -206,7 +210,7 @@ class ContactHandler:
         elif w_status and not w_status.get("running"):
             worker_section = "【背景任務】無執行中任務\n\n"
 
-        contact = self.contact_repo.get_active()
+        contact = self.contact_repo.get_active(user_id=uid)
         if not contact:
             hint = f"{worker_section}尚未選定作用對象，請使用 select <關鍵字> 切換。" if worker_section else "尚未選定作用對象，請使用 select <IG_ID> 切換。"
             return CommandResult(

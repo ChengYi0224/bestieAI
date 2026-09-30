@@ -45,7 +45,7 @@ class CommandParser(ABC):
         ...
 
     @abstractmethod
-    def parse(self, parts: List[str], db_path: Optional[Any] = None) -> BaseCommand:
+    def parse(self, parts: List[str], db_path: Optional[Any] = None, user_id: Optional[int] = None) -> BaseCommand:
         """將 parts（已 split 的字串）解析為 BaseCommand。"""
         ...
 
@@ -63,7 +63,7 @@ class CommandParserRegistry:
             cls._registry[alias.lower()] = parser
 
     @classmethod
-    def parse(cls, raw_text: str, db_path: Optional[Any] = None) -> BaseCommand:
+    def parse(cls, raw_text: str, db_path: Optional[Any] = None, user_id: Optional[int] = None) -> BaseCommand:
         text = raw_text.strip()
         if not text:
             return ChatCommand(text="")
@@ -82,7 +82,7 @@ class CommandParserRegistry:
         # 3. 查表
         parser = cls._registry.get(cmd_key)
         if parser:
-            return parser.parse(parts, db_path=db_path)
+            return parser.parse(parts, db_path=db_path, user_id=user_id)
 
         # 4. fallback：當作 AI 聊天
         return ChatCommand(text=text)
@@ -94,7 +94,7 @@ class _HelpParser(CommandParser):
     @property
     def aliases(self): return ("help", "h", "?", "指令")
 
-    def parse(self, parts, db_path=None):
+    def parse(self, parts, db_path=None, user_id=None):
         show_all = len(parts) >= 2 and parts[1].lower() in ("all", "full", "全部", "詳細")
         return HelpCommand(show_all=show_all)
 
@@ -103,7 +103,7 @@ class _TrackParser(CommandParser):
     @property
     def aliases(self): return ("track", "t")
 
-    def parse(self, parts, db_path=None):
+    def parse(self, parts, db_path=None, user_id=None):
         target = ""
         amount = settings.TRACK_DEFAULT_LIMIT
         if len(parts) >= 2:
@@ -123,7 +123,7 @@ class _TrackFullParser(CommandParser):
     @property
     def aliases(self): return ("track_full", "tf")
 
-    def parse(self, parts, db_path=None):
+    def parse(self, parts, db_path=None, user_id=None):
         target = None
         max_amount = settings.TRACK_FULL_DEFAULT_LIMIT
         if len(parts) >= 2:
@@ -134,9 +134,7 @@ class _TrackFullParser(CommandParser):
                 if len(parts) >= 3 and parts[2].isdigit():
                     max_amount = int(parts[2])
         if not target:
-            from app.storage.db import get_active_contact
-            active = get_active_contact(db_path=db_path)
-            target = active["ig_account_id"] if active else ""
+            target = _active_account(db_path, user_id) or ""
         return TrackFullCommand(target=target or "", max_amount=max_amount)
 
 
@@ -144,7 +142,7 @@ class _SelectParser(CommandParser):
     @property
     def aliases(self): return ("select", "s")
 
-    def parse(self, parts, db_path=None):
+    def parse(self, parts, db_path=None, user_id=None):
         return SelectCommand(query=parts[1] if len(parts) >= 2 else "")
 
 
@@ -152,7 +150,7 @@ class _NicknameParser(CommandParser):
     @property
     def aliases(self): return ("nickname", "nick", "n", "暱稱")
 
-    def parse(self, parts, db_path=None):
+    def parse(self, parts, db_path=None, user_id=None):
         nick = parts[1] if len(parts) >= 2 else ""
         target_acc = parts[2] if len(parts) >= 3 else None
         return NicknameCommand(nickname=nick, target=target_acc)
@@ -162,7 +160,7 @@ class _MeParser(CommandParser):
     @property
     def aliases(self): return ("me", "m", "我")
 
-    def parse(self, parts, db_path=None):
+    def parse(self, parts, db_path=None, user_id=None):
         return MeCommand(content=" ".join(parts[1:]) if len(parts) >= 2 else "")
 
 
@@ -170,7 +168,7 @@ class _StatusParser(CommandParser):
     @property
     def aliases(self): return ("status", "query", "st", "q", "進度", "狀態")
 
-    def parse(self, parts, db_path=None):
+    def parse(self, parts, db_path=None, user_id=None):
         return StatusCommand()
 
 
@@ -178,7 +176,7 @@ class _ListParser(CommandParser):
     @property
     def aliases(self): return ("list", "ls", "l")
 
-    def parse(self, parts, db_path=None):
+    def parse(self, parts, db_path=None, user_id=None):
         return ListContactsCommand()
 
 
@@ -186,7 +184,7 @@ class _CardParser(CommandParser):
     @property
     def aliases(self): return ("card", "summary", "c", "摘要", "摘要卡")
 
-    def parse(self, parts, db_path=None):
+    def parse(self, parts, db_path=None, user_id=None):
         is_full = False
         clean_parts = parts[1:]
         if clean_parts and clean_parts[0].lower() in ("full", "-f", "--full", "全景", "長文"):
@@ -200,8 +198,8 @@ class _RefreshSummaryParser(CommandParser):
     @property
     def aliases(self): return ("refresh_summary", "rs", "ref")
 
-    def parse(self, parts, db_path=None):
-        target = _resolve_active(parts, db_path=db_path)
+    def parse(self, parts, db_path=None, user_id=None):
+        target = _resolve_active(parts, db_path=db_path, user_id=user_id)
         return RefreshSummaryCommand(target=target or "")
 
 
@@ -209,8 +207,8 @@ class _SummarizeHistoryParser(CommandParser):
     @property
     def aliases(self): return ("summarize_history", "sh", "sum")
 
-    def parse(self, parts, db_path=None):
-        target = _resolve_active(parts, db_path=db_path)
+    def parse(self, parts, db_path=None, user_id=None):
+        target = _resolve_active(parts, db_path=db_path, user_id=user_id)
         return SummarizeHistoryCommand(target=target or "")
 
 
@@ -218,8 +216,8 @@ class _SyncParser(CommandParser):
     @property
     def aliases(self): return ("sync", "sy")
 
-    def parse(self, parts, db_path=None):
-        target = _resolve_active(parts, db_path=db_path)
+    def parse(self, parts, db_path=None, user_id=None):
+        target = _resolve_active(parts, db_path=db_path, user_id=user_id)
         return SyncCommand(target=target or "")
 
 
@@ -227,7 +225,7 @@ class _UntrackParser(CommandParser):
     @property
     def aliases(self): return ("untrack", "ut")
 
-    def parse(self, parts, db_path=None):
+    def parse(self, parts, db_path=None, user_id=None):
         return UntrackCommand(target=parts[1] if len(parts) >= 2 else "")
 
 
@@ -235,8 +233,8 @@ class _RebuildVectorsParser(CommandParser):
     @property
     def aliases(self): return ("rebuild_vectors", "rv", "rb")
 
-    def parse(self, parts, db_path=None):
-        target = _resolve_active(parts, db_path=db_path)
+    def parse(self, parts, db_path=None, user_id=None):
+        target = _resolve_active(parts, db_path=db_path, user_id=user_id)
         return RebuildVectorsCommand(target=target or "")
 
 
@@ -244,7 +242,7 @@ class _ExportParser(CommandParser):
     @property
     def aliases(self): return ("exp", "export")
 
-    def parse(self, parts, db_path=None):
+    def parse(self, parts, db_path=None, user_id=None):
         limit = 20
         immediate = False
         target = None
@@ -259,9 +257,7 @@ class _ExportParser(CommandParser):
                 target = p
 
         if not target:
-            from app.storage.db import get_active_contact
-            active = get_active_contact(db_path=db_path)
-            target = active["ig_account_id"] if active else ""
+            target = _active_account(db_path, user_id) or ""
 
         return ExportCommand(limit=limit, immediate=immediate, target=target)
 
@@ -270,7 +266,7 @@ class _LoginParser(CommandParser):
     @property
     def aliases(self): return ("login", "登入")
 
-    def parse(self, parts, db_path=None):
+    def parse(self, parts, db_path=None, user_id=None):
         if len(parts) >= 3:
             return LoginCommand(ig_username=parts[1].strip(), ig_password=parts[2].strip())
         return LoginCommand(ig_username="", ig_password="")
@@ -280,20 +276,32 @@ class _TwoFactorParser(CommandParser):
     @property
     def aliases(self): return ("2fa", "twofactor", "otp")
 
-    def parse(self, parts, db_path=None):
+    def parse(self, parts, db_path=None, user_id=None):
         code = parts[1].strip() if len(parts) > 1 else ""
         return TwoFactorCommand(code=code)
 
 
 # ─── 工具函式 ─────────────────────────────────────────────────────────────────
 
-def _resolve_active(parts: List[str], index: int = 1, db_path: Optional[Any] = None) -> Optional[str]:
-    """若 parts[index] 存在且非數字則直接回傳；否則查 active contact。"""
+def _active_account(db_path: Optional[Any], user_id: Optional[int]) -> Optional[str]:
+    """查詢該使用者目前作用對象的 IG 帳號；未指定使用者（例如尚未綁定）時一律視為無。"""
+    if user_id is None:
+        return None
+    from app.storage.db import get_active_contact
+    active = get_active_contact(user_id, db_path=db_path)
+    return active["ig_account_id"] if active else None
+
+
+def _resolve_active(
+    parts: List[str],
+    index: int = 1,
+    db_path: Optional[Any] = None,
+    user_id: Optional[int] = None,
+) -> Optional[str]:
+    """若 parts[index] 存在且非數字則直接回傳；否則查該使用者的 active contact。"""
     if len(parts) > index and not parts[index].isdigit():
         return parts[index]
-    from app.storage.db import get_active_contact
-    active = get_active_contact(db_path=db_path)
-    return active["ig_account_id"] if active else None
+    return _active_account(db_path, user_id)
 
 
 # ─── 自動註冊所有 Parser ──────────────────────────────────────────────────────

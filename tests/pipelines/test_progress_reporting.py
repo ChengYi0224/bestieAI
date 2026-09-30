@@ -61,7 +61,7 @@ def test_rebuild_vectors_progress_pipeline(tmp_path):
     """驗證 rebuild_vectors 依序執行各階段並透過 progress_callback 回報。"""
     db_file = tmp_path / "test_rebuild_prog.db"
     init_db(db_file)
-    cid = get_or_create_contact("test_user", "Test User", db_path=db_file)
+    cid = get_or_create_contact("test_user", "Test User", db_path=db_file, user_id=1)
 
     save_messages(cid, [
         {"ig_item_id": "m1", "sender": "them", "content": "明天開會嗎", "sent_at": "2026-09-15T10:00:00"},
@@ -100,7 +100,7 @@ def test_router_q_command_shows_dynamic_progress(tmp_path):
         "mode": "重建向量庫",
         "detail": "提煉事件中: 批次 3/10 完成 (累計 15 條事件)",
         "start_time": time.time() - 45
-    }, db_path=db_file)
+    }, 1, db_path=db_file)
 
     res_q1 = router.handle_message("q")
     assert "【重建向量庫執行中】" in res_q1
@@ -114,7 +114,7 @@ def test_router_q_command_shows_dynamic_progress(tmp_path):
         "mode": "重建向量庫",
         "detail": "同質事件融合中: 第 1~2/2 群...",
         "start_time": time.time() - 90
-    }, db_path=db_file)
+    }, 1, db_path=db_file)
 
     res_q2 = router.handle_message("q")
     assert "同質事件融合中: 第 1~2/2 群..." in res_q2
@@ -126,7 +126,7 @@ def test_router_q_command_shows_dynamic_progress(tmp_path):
         "mode": "全景復盤分析",
         "detail": "共 1200 則對話，正在呼叫 LLM 進行 7 大維度全景深度復盤分析...",
         "start_time": time.time() - 10
-    }, db_path=db_file)
+    }, 1, db_path=db_file)
 
     res_q3 = router.handle_message("status")
     assert "【全景復盤分析執行中】" in res_q3

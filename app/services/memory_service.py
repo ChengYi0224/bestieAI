@@ -9,6 +9,7 @@ memory_service.py — 記憶組裝與高效檢索服務。
   避免低相關記憶被帶入 prompt。
 """
 import logging
+import threading
 from typing import Optional, Dict, Any, Tuple, List
 
 from app.core.config import settings
@@ -19,6 +20,7 @@ from app.storage.db import (
     get_bot_conversations,
     get_contacts_with_nickname,
 )
+from app.storage.scope import vector_tenant
 from app.storage.vectors import VectorStore
 from app.utils.text import format_chat_messages
 
@@ -55,8 +57,11 @@ class MemoryManager:
         user_id: Optional[int] = None,
     ):
         self.user_id = user_id
-        self.vector_store = vector_store or VectorStore(user_id=user_id)
-        self.self_vector_store = self_vector_store or VectorStore(collection_name="user_self", user_id=user_id)
+        # 資料庫查詢一律以明確的租戶 ID 隔離；未指定時視為擁有者
+        self.tenant_id: int = user_id if user_id is not None else settings.OWNER_USER_ID
+        vs_tenant = vector_tenant(self.tenant_id)
+        self.vector_store = vector_store or VectorStore(user_id=vs_tenant)
+        self.self_vector_store = self_vector_store or VectorStore(collection_name="user_self", user_id=vs_tenant)
         self.db_path = db_path
         self.last_query_embedding: Optional[List[float]] = None
 
@@ -108,7 +113,7 @@ class MemoryManager:
         """
         cross_rag_list = []
         try:
-            contacts_with_nick = get_contacts_with_nickname(db_path=self.db_path)
+            contacts_with_nick = get_contacts_with_nickname(self.tenant_id, db_path=self.db_path)
             for c in contacts_with_nick:
                 nick = c["nickname"]
                 if nick and (nick.lower() in user_query.lower()) and c["id"] != current_contact_id:
@@ -138,9 +143,9 @@ class MemoryManager:
         if contact_id is not None:
             from app.storage.repositories.contacts import ContactRepository
             contact_repo = ContactRepository(db_path=self.db_path)
-            contact = contact_repo.get_by_id(contact_id, user_id=self.user_id)
+            contact = contact_repo.get_by_id(contact_id, user_id=self.tenant_id)
         else:
-            contact = get_active_contact(db_path=self.db_path)
+            contact = get_active_contact(self.tenant_id, db_path=self.db_path)
 
         if not contact:
             return None, "", "", "", "", ""
@@ -202,6 +207,7 @@ class MemoryManager:
         turns = settings.CHAT_HISTORY_TURNS
         bot_convs = get_bot_conversations(
             contact_id=contact_id,
+            user_id=self.tenant_id,
             limit=turns * 2,
             db_path=self.db_path,
         )
@@ -223,3 +229,23 @@ class MemoryManager:
             chat_history_str,
             self_context_str,
         )
+
+
+class MemoryManagerPool:
+    """依使用者提供獨立的 MemoryManager（各自的向量庫分區與資料庫租戶）。"""
+
+    def __init__(self, override: Optional[MemoryManager] = None, db_path: Optional[Any] = None):
+        self._override = override  # 測試或特殊情境：所有使用者共用同一個實例
+        self._db_path = db_path
+        self._by_user: Dict[int, MemoryManager] = {}
+        self._lock = threading.Lock()
+
+    def for_user(self, user_id: int) -> MemoryManager:
+        if self._override is not None:
+            return self._override
+        with self._lock:
+            mgr = self._by_user.get(user_id)
+            if mgr is None:
+                mgr = MemoryManager(db_path=self._db_path, user_id=user_id)
+                self._by_user[user_id] = mgr
+            return mgr

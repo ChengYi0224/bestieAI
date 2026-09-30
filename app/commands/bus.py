@@ -46,6 +46,12 @@ class CommandBus:
             logger.error(err_msg)
             return CommandResult(success=False, message=err_msg)
 
+        if command.requires_user and command.user_id is None:
+            return CommandResult(
+                success=False,
+                message="尚未綁定身分，請先私訊：login <IG帳號> <密碼>（之後即可使用其他指令）",
+            )
+
         try:
             if isinstance(handler, CommandHandler):
                 return handler.handle(command)

@@ -77,7 +77,7 @@ class ChatApiService:
         # 若未自記憶服務取得對話歷史，自資料庫補足
         if not chat_history:
             try:
-                history_rows = self.bot_state_repo.get_conversations(contact_id=resolved_cid, limit=10)
+                history_rows = self.bot_state_repo.get_conversations(contact_id=resolved_cid, limit=10, user_id=user_id)
                 chat_history = "\n".join([f"{r['role']}: {r['content']}" for r in history_rows])
             except Exception as e:
                 logger.warning(f"讀取對話歷史失敗，以空歷史繼續: {e}")
@@ -95,8 +95,8 @@ class ChatApiService:
 
         # 5. 儲存本次對話紀錄
         try:
-            self.bot_state_repo.add_conversation(role="user", content=clean_msg, contact_id=resolved_cid)
-            self.bot_state_repo.add_conversation(role="assistant", content=reply, contact_id=resolved_cid)
+            self.bot_state_repo.add_conversation(role="user", content=clean_msg, contact_id=resolved_cid, user_id=user_id)
+            self.bot_state_repo.add_conversation(role="assistant", content=reply, contact_id=resolved_cid, user_id=user_id)
         except Exception as e:
             logger.warning(f"儲存對話紀錄失敗: {e}")
 

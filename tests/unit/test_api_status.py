@@ -2,7 +2,7 @@
 import pytest
 from fastapi.testclient import TestClient
 from app.api.app import create_app
-from app.api.dependencies import get_bot_state_repo, get_contact_repo
+from app.api.dependencies import get_bot_state_repo, get_contact_repo, get_current_user
 from app.storage.db import init_db
 from app.storage.repositories.bot_state import BotStateRepository
 from app.storage.repositories.contacts import ContactRepository
@@ -19,6 +19,7 @@ def test_app(tmp_path):
     app = create_app()
     app.dependency_overrides[get_bot_state_repo] = lambda: bot_repo
     app.dependency_overrides[get_contact_repo] = lambda: contact_repo
+    app.dependency_overrides[get_current_user] = lambda: {"id": 1, "username": "authorized_user"}
 
     return app, bot_repo, contact_repo
 
@@ -29,9 +30,9 @@ def test_status_endpoint(test_app):
     client = TestClient(app)
 
     # 設定 worker 狀態與活躍聯絡人
-    bot_repo.set_worker_status({"state": "running", "current_task": "polling"})
-    c_id = contact_repo.get_or_create("alice_ig", "Alice")
-    contact_repo.set_active_by_id(c_id)
+    bot_repo.set_worker_status({"state": "running", "current_task": "polling"}, user_id=1)
+    c_id = contact_repo.get_or_create("alice_ig", "Alice", user_id=1)
+    contact_repo.set_active_by_id(c_id, user_id=1)
 
     response = client.get("/status")
     assert response.status_code == 200

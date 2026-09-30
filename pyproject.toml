@@ -28,4 +28,5 @@ dependencies = [
 pythonpath = ["."]
 markers = [
     "external: marks tests as external API live tests (deselect with -m 'not external', require -E / --external)",
+    "no_default_tenant: 不自動以 user 1 補上指令的 user_id（驗證多租戶 / 未綁定行為的測試使用）",
 ]

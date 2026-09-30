@@ -13,42 +13,42 @@ PIPELINE (L2):
 """
 from typing import Any, Optional
 
-from app.commands.base import CommandResult
-from app.core.config import settings
+from app.commands.base import CommandResult, need_user
 from app.commands.commands import (
     MeCommand, CardCommand, RefreshSummaryCommand,
     SummarizeHistoryCommand, SyncCommand, RebuildVectorsCommand,
 )
 from app.storage.repositories import ContactRepository
-from app.services.memory_service import MemoryManager
+from app.services.memory_service import MemoryManagerPool
 
 
 class MemoryHandler:
-    """記憶庫與摘要 Handler。依賴 MemoryManager 與 ContactRepository。"""
+    """記憶庫與摘要 Handler。依賴 MemoryManagerPool（每位使用者獨立記憶）與 ContactRepository。"""
 
     def __init__(
         self,
-        memory_manager: MemoryManager,
+        memory_pool: MemoryManagerPool,
         contact_repo: Optional[ContactRepository] = None,
         db_path: Optional[Any] = None,
     ):
-        self.memory_manager = memory_manager
+        self.memory_pool = memory_pool
         self.contact_repo = contact_repo or ContactRepository(db_path)
 
     def handle_me(self, cmd: MeCommand) -> CommandResult:
         if not cmd.content.strip():
             return CommandResult(success=False, message="格式錯誤！請提供要記錄的內容：me <內容>")
         try:
-            self.memory_manager.add_self_memory(cmd.content)
+            self.memory_pool.for_user(need_user(cmd)).add_self_memory(cmd.content)
             return CommandResult(success=True, message="好，我記下了。", data={"content": cmd.content})
         except Exception as e:
             return CommandResult(success=False, message=f"記錄失敗: {e}")
 
     def handle_card(self, cmd: CardCommand) -> CommandResult:
+        uid = need_user(cmd)
         contact = (
-            self.contact_repo.find_by_identifier(cmd.target, user_id=settings.BOT_USER_ID)
+            self.contact_repo.find_by_identifier(cmd.target, user_id=uid)
             if cmd.target
-            else self.contact_repo.get_active()
+            else self.contact_repo.get_active(user_id=uid)
         )
 
 

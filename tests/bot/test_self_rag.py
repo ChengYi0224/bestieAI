@@ -19,18 +19,18 @@ def test_nickname_db_crud(tmp_path):
     db_file = tmp_path / "test_nick.db"
     init_db(db_file)
 
-    c1 = get_or_create_contact("alice_w", "Alice", db_path=db_file)
-    c2 = get_or_create_contact("bob_k", "Bob", db_path=db_file)
+    c1 = get_or_create_contact("alice_w", "Alice", db_path=db_file, user_id=1)
+    c2 = get_or_create_contact("bob_k", "Bob", db_path=db_file, user_id=1)
 
     # 初步查詢無暱稱
-    assert len(get_contacts_with_nickname(db_path=db_file)) == 0
+    assert len(get_contacts_with_nickname(1, db_path=db_file)) == 0
 
     # 設定暱稱
     success = set_contact_nickname(c1, "小白", db_path=db_file)
     assert success is True
 
     # 再次查詢
-    nicks = get_contacts_with_nickname(db_path=db_file)
+    nicks = get_contacts_with_nickname(1, db_path=db_file)
     assert len(nicks) == 1
     assert nicks[0]["nickname"] == "小白"
     assert nicks[0]["ig_account_id"] == "alice_w"
@@ -60,8 +60,8 @@ def test_vector_store_self_memory(tmp_path):
 def test_memory_manager_self_rag(tmp_path):
     db_file = tmp_path / "test_mem.db"
     init_db(db_file)
-    cid = get_or_create_contact("charlie", "Charlie", db_path=db_file)
-    set_active_contact("charlie", db_path=db_file)
+    cid = get_or_create_contact("charlie", "Charlie", db_path=db_file, user_id=1)
+    set_active_contact("charlie", 1, db_path=db_file)
 
     mock_chat_vs = MagicMock()
     mock_chat_vs.query.return_value = [{"text": "chat chunk 1"}]
@@ -109,8 +109,8 @@ def test_llm_extract_self_info():
 def test_router_nickname_and_me_command(tmp_path):
     db_file = tmp_path / "test_router_nick.db"
     init_db(db_file)
-    cid = get_or_create_contact("david_99", "David", db_path=db_file)
-    set_active_contact("david_99", db_path=db_file)
+    cid = get_or_create_contact("david_99", "David", db_path=db_file, user_id=1)
+    set_active_contact("david_99", 1, db_path=db_file)
 
     mock_memory = MagicMock()
     mock_llm = MagicMock()
@@ -130,9 +130,9 @@ def test_router_cross_rag_trigger(tmp_path):
     db_file = tmp_path / "test_cross_rag.db"
     init_db(db_file)
 
-    c_active = get_or_create_contact("active_user", "Active", db_path=db_file)
-    c_friend = get_or_create_contact("friend_eva", "Eva", db_path=db_file)
-    set_active_contact("active_user", db_path=db_file)
+    c_active = get_or_create_contact("active_user", "Active", db_path=db_file, user_id=1)
+    c_friend = get_or_create_contact("friend_eva", "Eva", db_path=db_file, user_id=1)
+    set_active_contact("active_user", 1, db_path=db_file)
     set_contact_nickname(c_friend, "小伊", db_path=db_file)
 
     mock_memory = MagicMock()

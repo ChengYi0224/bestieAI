@@ -45,45 +45,48 @@ class ContactRepository(BaseRepository):
         return cursor.fetchone()
 
     @with_connection(readonly=True)
-    def get_active(self, conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
+    def get_active(self, conn: sqlite3.Connection, *, user_id: int) -> Optional[sqlite3.Row]:
+        """取得指定使用者目前的作用對象（僅限屬於該使用者的聯絡人）。"""
         cursor = conn.cursor()
         cursor.execute("""
             SELECT c.* FROM contacts c
-            INNER JOIN bot_state s ON c.id = s.active_contact_id
-            WHERE s.id = 1
-        """)
+            INNER JOIN bot_user_state s ON c.id = s.active_contact_id
+            WHERE s.user_id = ? AND c.user_id = ?
+        """, (user_id, user_id))
         return cursor.fetchone()
 
-    @with_connection(readonly=False)
-    def set_active(self, conn: sqlite3.Connection, ig_account_id: str) -> bool:
-        cursor = conn.cursor()
-        cursor.execute("SELECT id FROM contacts WHERE ig_account_id = ?", (ig_account_id,))
-        contact = cursor.fetchone()
-        if contact:
-            cursor.execute("""
-                UPDATE bot_state
-                SET active_contact_id = ?, pending_selection = NULL, updated_at = ?
-                WHERE id = 1
-            """, (contact["id"], datetime.now(timezone.utc).isoformat()))
-            return True
-        return False
+    def _activate(self, conn: sqlite3.Connection, contact_id: int, user_id: int) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute("INSERT OR IGNORE INTO bot_user_state (user_id, updated_at) VALUES (?, ?)", (user_id, now))
+        conn.execute("""
+            UPDATE bot_user_state
+            SET active_contact_id = ?, pending_selection = NULL, updated_at = ?
+            WHERE user_id = ?
+        """, (contact_id, now, user_id))
 
     @with_connection(readonly=False)
-    def set_active_by_id(self, conn: sqlite3.Connection, contact_id: int) -> bool:
+    def set_active(self, conn: sqlite3.Connection, ig_account_id: str, *, user_id: int) -> bool:
         cursor = conn.cursor()
-        cursor.execute("SELECT id FROM contacts WHERE id = ?", (contact_id,))
+        cursor.execute("SELECT id FROM contacts WHERE ig_account_id = ? AND user_id = ?", (ig_account_id, user_id))
         contact = cursor.fetchone()
-        if contact:
-            cursor.execute("""
-                UPDATE bot_state
-                SET active_contact_id = ?, pending_selection = NULL, updated_at = ?
-                WHERE id = 1
-            """, (contact["id"], datetime.now(timezone.utc).isoformat()))
-            return True
-        return False
+        if not contact:
+            return False
+        self._activate(conn, contact["id"], user_id)
+        return True
 
     @with_connection(readonly=False)
-    def get_or_create(self, conn: sqlite3.Connection, ig_account_id: str, display_name: Optional[str] = None, user_id: int = 1) -> int:
+    def set_active_by_id(self, conn: sqlite3.Connection, contact_id: int, *, user_id: int) -> bool:
+        """僅能將屬於該使用者的聯絡人設為作用對象，避免切換到他人的聯絡人。"""
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM contacts WHERE id = ? AND user_id = ?", (contact_id, user_id))
+        contact = cursor.fetchone()
+        if not contact:
+            return False
+        self._activate(conn, contact["id"], user_id)
+        return True
+
+    @with_connection(readonly=False)
+    def get_or_create(self, conn: sqlite3.Connection, ig_account_id: str, display_name: Optional[str] = None, *, user_id: int) -> int:
         cursor = conn.cursor()
         cursor.execute("SELECT id FROM contacts WHERE ig_account_id = ? AND user_id = ?", (ig_account_id, user_id))
         row = cursor.fetchone()
@@ -141,13 +144,14 @@ class ContactRepository(BaseRepository):
         return cursor.rowcount > 0
 
     @with_connection(readonly=True)
-    def get_with_nickname(self, conn: sqlite3.Connection) -> List[sqlite3.Row]:
+    def get_with_nickname(self, conn: sqlite3.Connection, *, user_id: UserScope) -> List[sqlite3.Row]:
+        cond, params = _scope(user_id)
         cursor = conn.cursor()
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT id, ig_account_id, display_name, nickname
             FROM contacts
-            WHERE nickname IS NOT NULL AND TRIM(nickname) != ''
-        """)
+            WHERE nickname IS NOT NULL AND TRIM(nickname) != '' AND {cond}
+        """, params)
         return cursor.fetchall()
 
     @with_connection(readonly=True)
@@ -212,7 +216,7 @@ class ContactRepository(BaseRepository):
         """取得所有追蹤中（status = 'tracked'）的聯絡人。"""
         cond, params = _scope(user_id)
         cursor = conn.cursor()
-        cursor.execute(f"SELECT id, ig_account_id, display_name FROM contacts WHERE status = 'tracked' AND {cond}", params)
+        cursor.execute(f"SELECT id, user_id, ig_account_id, display_name FROM contacts WHERE status = 'tracked' AND {cond}", params)
         return cursor.fetchall()
 
     @with_connection(readonly=False)

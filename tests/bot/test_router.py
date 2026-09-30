@@ -93,9 +93,9 @@ def test_select_fuzzy_matching(tmp_path):
     router = CommandRouter(memory_manager=MagicMock(), llm_client=MagicMock(), db_path=db_file)
 
     # 建立兩個聯絡人：一個包含 sample，另一個也包含 sample
-    get_or_create_contact("sample_user_01", "Sample", db_path=db_file)
-    get_or_create_contact("sample_friend", "Sample Friend", db_path=db_file)
-    get_or_create_contact("alice_w", "Alice", db_path=db_file)
+    get_or_create_contact("sample_user_01", "Sample", db_path=db_file, user_id=1)
+    get_or_create_contact("sample_friend", "Sample Friend", db_path=db_file, user_id=1)
+    get_or_create_contact("alice_w", "Alice", db_path=db_file, user_id=1)
 
     # 1. 單一吻合模糊查詢（例如 "alice"）
     res_single = router.handle_message("select alice")
@@ -133,7 +133,7 @@ def test_status_and_query_worker_progress(tmp_path):
         "pages": 12,
         "count": 240,
         "start_time": time.time() - 300
-    }, db_path=db_file)
+    }, 1, db_path=db_file)
 
     res = router.handle_message("query")
     assert "背景抓取中" in res
@@ -145,7 +145,7 @@ def test_status_and_query_worker_progress(tmp_path):
     set_worker_status({
         "running": False,
         "target": "test_target"
-    }, db_path=db_file)
+    }, 1, db_path=db_file)
 
     res_done = router.handle_message("status")
     assert "無執行中任務" in res_done
@@ -159,12 +159,12 @@ def test_chat_history_in_reply(tmp_path):
     db_file = tmp_path / "chat_history_test.db"
     init_db(db_file)
 
-    contact_id = get_or_create_contact("test_user", db_path=db_file)
-    set_active_contact("test_user", db_path=db_file)
+    contact_id = get_or_create_contact("test_user", db_path=db_file, user_id=1)
+    set_active_contact("test_user", 1, db_path=db_file)
 
     # 預先寫入兩輪舊對話
-    add_bot_conversation(role="user", content="他說今天不想聊", contact_id=contact_id, db_path=db_file)
-    add_bot_conversation(role="assistant", content="可能他只是累了，不一定是針對你", contact_id=contact_id, db_path=db_file)
+    add_bot_conversation(user_id=1, role="user", content="他說今天不想聊", contact_id=contact_id, db_path=db_file)
+    add_bot_conversation(user_id=1, role="assistant", content="可能他只是累了，不一定是針對你", contact_id=contact_id, db_path=db_file)
 
     mock_memory = MagicMock()
     mock_memory.get_full_context.return_value = (
@@ -195,7 +195,7 @@ def test_card_command(tmp_path):
     db_file = tmp_path / "card_test.db"
     init_db(db_file)
 
-    c_id = get_or_create_contact("amy_lee", "Amy", db_path=db_file)
+    c_id = get_or_create_contact("amy_lee", "Amy", db_path=db_file, user_id=1)
     set_contact_nickname(c_id, "愛咪", db_path=db_file)
     update_contact_summary(c_id, "這是 Amy 的關係深度復盤摘要內容", db_path=db_file)
 
@@ -212,12 +212,12 @@ def test_card_command(tmp_path):
     assert "這是 Amy 的關係深度復盤摘要內容" in res_by_nick
 
     # 2. select 作用對象後不帶參數直接輸入 card
-    set_active_contact("amy_lee", db_path=db_file)
+    set_active_contact("amy_lee", 1, db_path=db_file)
     res_active = router.handle_message("card")
     assert "這是 Amy 的關係深度復盤摘要內容" in res_active
 
     # 3. 查無對象或尚未建立摘要卡
-    get_or_create_contact("no_summary_user", "NoSummary", db_path=db_file)
+    get_or_create_contact("no_summary_user", "NoSummary", db_path=db_file, user_id=1)
     res_empty = router.handle_message("card no_summary_user")
     assert "目前尚未建立摘要卡" in res_empty
 
@@ -228,8 +228,8 @@ def test_chat_auto_sync_triggers_callback(tmp_path):
 
     db_file = tmp_path / "auto_sync.db"
     init_db(db_file)
-    get_or_create_contact("active_target", "Active Target", db_path=db_file)
-    set_active_contact("active_target", db_path=db_file)
+    get_or_create_contact("active_target", "Active Target", db_path=db_file, user_id=1)
+    set_active_contact("active_target", 1, db_path=db_file)
 
     mock_memory = MagicMock()
     mock_memory.get_full_context.return_value = (
@@ -253,7 +253,7 @@ def test_chat_auto_sync_triggers_callback(tmp_path):
 
     reply = router.handle_message("你好呀")
     assert reply == "測試回覆"
-    mock_sync.assert_called_once_with("active_target")
+    mock_sync.assert_called_once_with("active_target", user_id=1)
 
 
 def test_chat_auto_sync_fallback_on_exception(tmp_path):
@@ -262,8 +262,8 @@ def test_chat_auto_sync_fallback_on_exception(tmp_path):
 
     db_file = tmp_path / "auto_sync_fallback.db"
     init_db(db_file)
-    get_or_create_contact("active_target_err", "Target Err", db_path=db_file)
-    set_active_contact("active_target_err", db_path=db_file)
+    get_or_create_contact("active_target_err", "Target Err", db_path=db_file, user_id=1)
+    set_active_contact("active_target_err", 1, db_path=db_file)
 
     mock_memory = MagicMock()
     mock_memory.get_full_context.return_value = (
@@ -287,7 +287,7 @@ def test_chat_auto_sync_fallback_on_exception(tmp_path):
 
     reply = router.handle_message("在嗎")
     assert reply == "正常回覆"
-    mock_sync.assert_called_once_with("active_target_err")
+    mock_sync.assert_called_once_with("active_target_err", user_id=1)
 
 
 def test_chat_handler_model_parameter_forwarding(tmp_path):
@@ -296,8 +296,8 @@ def test_chat_handler_model_parameter_forwarding(tmp_path):
 
     db_file = tmp_path / "model_param.db"
     init_db(db_file)
-    get_or_create_contact("test_forward", "Test Forward", db_path=db_file)
-    set_active_contact("test_forward", db_path=db_file)
+    get_or_create_contact("test_forward", "Test Forward", db_path=db_file, user_id=1)
+    set_active_contact("test_forward", 1, db_path=db_file)
 
     mock_memory = MagicMock()
     mock_memory.get_full_context.return_value = (

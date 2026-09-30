@@ -2,7 +2,7 @@
 base.py — Command Bus 基礎類別與介面定義。
 """
 from dataclasses import dataclass, field
-from typing import Any, Optional, Dict
+from typing import Any, ClassVar, Optional, Dict
 
 
 @dataclass
@@ -33,8 +33,14 @@ class CommandResult:
 
 @dataclass
 class BaseCommand:
-    """領域命令的基礎抽象類別。"""
-    pass
+    """
+    領域命令的基礎抽象類別。
+
+    user_id: 發出指令的使用者（租戶）。由 Router 依發送者身分填入；requires_user 為 True 的指令
+    在 user_id 為 None 時會被 CommandBus 拒絕執行。
+    """
+    user_id: Optional[int] = field(default=None, kw_only=True)
+    requires_user: ClassVar[bool] = True
 
 
 class CommandHandler:
@@ -45,3 +51,10 @@ class CommandHandler:
 
 # sync_callback 的回傳值：>= 0 為新增則數，SYNC_FAILED 表示同步失敗（已 fallback 使用本地紀錄）
 SYNC_FAILED = -1
+
+
+def need_user(cmd: "BaseCommand") -> int:
+    """取得指令發送者的 user_id；缺少時拋出（正常流程已由 CommandBus 在派發前擋下）。"""
+    if cmd.user_id is None:
+        raise ValueError(f"{type(cmd).__name__} 缺少 user_id，無法判定租戶")
+    return cmd.user_id

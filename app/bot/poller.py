@@ -1,77 +1,92 @@
 """
-poller.py — MQTT 即時推播監聽與背景任務 Worker。
+poller.py — Bot 編排層：MQTT 即時推播監聽 → 身分解析 → 指令派發 → 動作執行。
 
 PIPELINE (L0 - End-to-End):
   [使用者手機 IG App] ──MQTT 推播──► BotPoller._on_realtime_message()
-                                                │
-                                                ▼
-                                    CommandRouter.handle_message()
-                                                │
-                                    (解析為 Command 並派發至 CommandBus)
-                                                │
-                          ┌─────────────────────┴─────────────────────┐
-                          ▼                                           ▼
-                    一般指令 / 陪聊                              非同步任務
-                 (即時 CommandResult)                   (TRACK / TRACK_FULL / SYNC)
-                          │                                           │
-                          ▼                                           ▼
-                 self.bot_ig.send_message()                  _task_queue 排程隊列
-                                                                      │
-                                                                      ▼
-                                                               TaskWorker 執行緒
-                                                                      │
-                                                        SourceAdapterFactory.create()
-                                                                      │
-                                                                      ▼
-                                                        IngestionPipeline.run_full_ingestion()
-                                                                      │
-                                                                      ▼
-                                                        self.bot_ig.send_message() (完成通知)
+                                        │ parse_realtime_event()      (bot/realtime.py)
+                                        ▼
+                               BotPoller._process_message()
+                                        │ SenderResolver.resolve()    (bot/identity.py)  發送者 PK → user_id
+                                        ▼
+                      CommandRouter.handle_message_structured(text, user_id)
+                                        │
+                                        ▼
+                         ActionDispatcher.dispatch()                  (bot/dispatcher.py)
+                          ├─ 一般回覆            → bot_ig.send_message()
+                          ├─ TRACK_FULL          → TrackWorker 佇列    (bot/task_worker.py)
+                          └─ TRACK / SYNC / ...  → 該使用者自己的 IG 連線 (services/ig_pool.py)
+
+  多用戶：每位使用者有獨立的 IG 連線、作用對象 / 待選清單 / 背景進度（bot_user_state）、
+  向量庫分區與 IngestionPipeline；擁有者 (OWNER_USER_ID) 使用 .env 主帳號 session。
 """
-import time
-import socket
 import logging
-import queue
+import socket
 import threading
-from datetime import datetime, timezone
+import time
 from collections import deque
-from contextlib import contextmanager
-from typing import Set, Optional, Dict, Any, List, Deque
+from typing import Any, Deque, Dict, Optional, Set
+
 from instagrapi import Client
 from instagrapi.exceptions import LoginRequired
 
-from app.core.config import settings
+from app.bot.activity import ActivityTracker
 from app.bot.auth import require_whitelist
-from app.core.error_logger import log_error
-from app.services.session_service import SessionManager
-from app.services.ig_service import IGClient
+from app.bot.dispatcher import ActionDispatcher
+from app.bot.identity import SenderResolver
+from app.bot.realtime import parse_realtime_event
 from app.bot.router import CommandRouter
-from app.commands.base import SYNC_FAILED
-from app.services.ingestion_service import IngestionPipeline
-from app.sources.factory import SourceAdapterFactory
-from app.storage.db import set_worker_status, get_worker_status, set_active_contact
+from app.bot.sync_service import MessageSyncService
+from app.bot.task_worker import TrackWorker
+from app.core.config import settings
+from app.core.error_logger import log_error
+from app.services.ig_pool import IGClientPool
+from app.services.ig_service import IGClient
+from app.services.ingestion_service import IngestionPipeline, IngestionPipelinePool
+from app.services.session_service import SessionManager
+from app.storage.repositories.users import UserRepository
 from app.storage.scope import ALL_USERS
 
 logger = logging.getLogger("bestieAI.bot_poller")
 
 
 class BotPoller:
-    BACKFILL_CHUNK = 100  # 背景補抓每輪抓取則數（每輪之間會釋放 IG 鎖並檢查前景任務）
+    MAX_SEEN_MESSAGE_IDS = 5000
 
     def __init__(
         self,
         session_manager: Optional[SessionManager] = None,
         router: Optional[CommandRouter] = None,
-        ingestion: Optional[IngestionPipeline] = None
+        ingestion: Optional[IngestionPipeline] = None,
+        ig_pool: Optional[IGClientPool] = None,
+        user_repo: Optional[UserRepository] = None,
     ):
         self.session_manager = session_manager or SessionManager()
-        self.ingestion = ingestion or IngestionPipeline()
-        self.seen_message_ids: Set[str] = set()
+        self.user_repo = user_repo or UserRepository()
         self.running: bool = False
         self.bot_client: Optional[Client] = None
         self.bot_ig: Optional[IGClient] = None
-        self.main_ig: Optional[IGClient] = None
         self.allowed_main_pk: Optional[str] = settings.MAIN_ACCOUNT_USER_ID or None
+
+        self.ig_pool = ig_pool or IGClientPool(self.session_manager, self.user_repo)
+        self.activity = ActivityTracker()
+        self._ingestions = IngestionPipelinePool(override=ingestion)
+        self.worker = TrackWorker(self.ig_pool, self._ingestions.for_user, self._notify)
+        self.sync_service = MessageSyncService(
+            self.ig_pool,
+            is_busy=lambda: self.activity.active() or self.worker.busy(),
+        )
+        self.dispatcher = ActionDispatcher(
+            ig_pool=self.ig_pool,
+            ingestion_for=self._ingestions.for_user,
+            worker=self.worker,
+            activity=self.activity,
+            send=self._notify,
+        )
+        self.resolver = SenderResolver(self._owner_pk, self.user_repo)
+
+        self.seen_message_ids: Set[str] = set()
+        self._seen_order: Deque[str] = deque()
+        self._seen_lock = threading.Lock()
 
         if router is not None:
             self.router = router
@@ -85,44 +100,17 @@ class BotPoller:
         else:
             self.router = CommandRouter(sync_callback=self._sync_contact_messages)
 
-        self._task_queue: queue.Queue = queue.Queue()
-        self._current_task: Optional[Dict[str, Any]] = None
-        self._worker_thread: Optional[threading.Thread] = None
-        self._ig_lock = threading.Lock()
-        self._client_lock = threading.Lock()
-        self._activity_lock = threading.Lock()
-        self._active_ingestions = 0
-        self._seen_lock = threading.Lock()
-        self._seen_order: Deque[str] = deque()
-        self._backfill_guard = threading.Lock()
-        self._backfilling: Set[str] = set()
+    # ==================== 小工具 ====================
 
-    MAX_SEEN_MESSAGE_IDS = 5000
-
-    def _get_main_ig(self) -> IGClient:
-        """取得（必要時登入）主帳號 IG 連線；全類別唯一登入點，避免多執行緒重複登入。"""
-        with self._client_lock:
-            if self.main_ig is None:
-                self.main_ig = IGClient(self.session_manager.login("main"))
-            return self.main_ig
-
-    @contextmanager
-    def _ingestion_activity(self):
-        """標記「正在使用 main_ig 進行長時間抓取」，讓背景補抓讓出連線。"""
-        with self._activity_lock:
-            self._active_ingestions += 1
+    def _notify(self, thread_id: str, text: str) -> None:
+        """以 Bot 帳號回覆私訊；失敗只記錄，不中斷流程。"""
+        if not self.bot_ig or not thread_id:
+            return
         try:
-            yield
-        finally:
-            with self._activity_lock:
-                self._active_ingestions -= 1
-
-    def _ig_busy(self) -> bool:
-        return (
-            self._current_task is not None
-            or not self._task_queue.empty()
-            or self._active_ingestions > 0
-        )
+            self.bot_ig.send_message(thread_id, text)
+        except Exception as e:
+            logger.error(f"發送回覆訊息失敗: {e}")
+            log_error(e, context="BotPoller._notify", logger_name="bestieAI.bot_poller")
 
     def _mark_seen(self, item_id: str) -> bool:
         """記錄已處理的 item_id；已見過回傳 False。保留最近 MAX_SEEN_MESSAGE_IDS 筆以免無限成長。"""
@@ -135,91 +123,16 @@ class BotPoller:
                 self.seen_message_ids.discard(self._seen_order.popleft())
             return True
 
-    def _sync_contact_messages(self, target_username: str, amount: int = 0) -> int:
-        """從 Instagram 同步指定對象之最新私訊至 SQLite 資料庫。失敗時回傳 SYNC_FAILED（-1）。
+    def _sync_contact_messages(self, target_username: str, amount: int = 0, *, user_id: int) -> int:
+        """Router / Handler 的同步回呼：以該使用者自己的 IG 連線同步私訊（失敗回傳 SYNC_FAILED）。"""
+        return self.sync_service.sync(target_username, amount, user_id=user_id)
 
-        amount>0 時前景只抓最新 amount 則即回傳；若尚未接上本地既有紀錄，
-        剩餘的更早歷史交由背景執行緒續抓。0 表示前景一路抓到接上本地既有紀錄。
-        """
-        if not target_username:
-            return 0
-        try:
-            self._get_main_ig()
-            from app.storage.db import get_or_create_contact, save_messages, get_latest_item_ids
-            contact_id = get_or_create_contact(ig_account_id=target_username, display_name=target_username)
-            existing_ids = get_latest_item_ids(contact_id=contact_id, limit=50)
-            adapter = SourceAdapterFactory.create("instagram", ig_client=self.main_ig)
-            fetch_kwargs = {"target": target_username, "amount": amount, "stop_item_ids": existing_ids}
-            if amount:
-                fetch_kwargs["truncate"] = False  # 保留整頁結果，避免與背景續抓的 cursor 之間出現斷層
-            with self._ig_lock:
-                normalized_msgs = adapter.fetch_messages(**fetch_kwargs)
-            inserted = save_messages(contact_id=contact_id, messages=self._to_db_rows(normalized_msgs))
-            logger.info(f"Auto-Sync 完成：{target_username} 獲取 {len(normalized_msgs)} 則，新增 {inserted} 則私訊。")
+    # ==================== 身分 ====================
 
-            cursor = getattr(adapter, "last_cursor", None)
-            thread_id = getattr(adapter, "last_thread_id", None)
-            if (
-                amount
-                and isinstance(cursor, str) and cursor
-                and isinstance(thread_id, str) and thread_id
-                and getattr(adapter, "last_hit_anchor", False) is not True
-            ):
-                self._start_backfill(target_username, contact_id, thread_id, cursor, existing_ids)
-            return inserted
-        except Exception as e:
-            logger.warning(f"Auto-Sync 同步 {target_username} 失敗 ({e})，Fallback 使用資料庫現有紀錄。")
-            log_error(e, context=f"BotPoller._sync_contact_messages — {target_username}", logger_name="bestieAI.bot_poller")
-            return SYNC_FAILED
-
-    @staticmethod
-    def _to_db_rows(normalized_msgs) -> List[Dict[str, Any]]:
-        return [
-            {"ig_item_id": m.external_id, "sender": m.sender, "content": m.content, "sent_at": m.sent_at}
-            for m in normalized_msgs
-        ]
-
-    def _start_backfill(self, target: str, contact_id: int, thread_id: str, cursor: str, anchor_ids: Set[str]) -> None:
-        """啟動背景執行緒，從 cursor 往更早的歷史續抓，直到接上本地既有紀錄或抓完為止。"""
-        with self._backfill_guard:
-            if target in self._backfilling:
-                return
-            self._backfilling.add(target)
-        threading.Thread(
-            target=self._backfill_worker,
-            args=(target, contact_id, thread_id, cursor, anchor_ids),
-            daemon=True,
-        ).start()
-        logger.info(f"背景補抓已啟動：{target}")
-
-    def _backfill_worker(self, target: str, contact_id: int, thread_id: str, cursor: Optional[str], anchor_ids: Set[str]) -> None:
-        from app.storage.db import save_messages
-        total = 0
-        try:
-            while cursor:
-                # 讓出 IG 連線給前景任務，避免同時打 API 觸發風控
-                while self._ig_busy():
-                    time.sleep(5.0)
-                adapter = SourceAdapterFactory.create("instagram", ig_client=self.main_ig)
-                with self._ig_lock:
-                    msgs = adapter.fetch_messages(
-                        target=target,
-                        amount=self.BACKFILL_CHUNK,
-                        stop_item_ids=anchor_ids,
-                        start_cursor=cursor,
-                        thread_id=thread_id,
-                        truncate=False,
-                    )
-                total += save_messages(contact_id=contact_id, messages=self._to_db_rows(msgs))
-                nxt = getattr(adapter, "last_cursor", None)
-                cursor = nxt if isinstance(nxt, str) and nxt else None
-            logger.info(f"背景補抓完成：{target} 共補入 {total} 則。")
-        except Exception as e:
-            logger.warning(f"背景補抓 {target} 中斷（已補入 {total} 則）: {e}")
-            log_error(e, context=f"BotPoller._backfill_worker — {target}", logger_name="bestieAI.bot_poller")
-        finally:
-            with self._backfill_guard:
-                self._backfilling.discard(target)
+    def _owner_pk(self) -> Optional[str]:
+        if not self.allowed_main_pk:
+            self._resolve_main_pk()
+        return self.allowed_main_pk
 
     def _resolve_main_pk(self) -> None:
         """動態取得主帳號的 Instagram PK (User ID)。"""
@@ -234,6 +147,8 @@ class BotPoller:
                     logger.info(f"已動態解析主帳號 {settings.MAIN_ACCOUNT_USERNAME} 之 PK: {self.allowed_main_pk}")
             except Exception as e:
                 logger.warning(f"動態查詢主帳號 PK 失敗 ({e})，請於 .env 設定 MAIN_ACCOUNT_USER_ID。")
+
+    # ==================== MQTT Realtime ====================
 
     def _setup_realtime(self) -> None:
         if not self.bot_client:
@@ -262,438 +177,53 @@ class BotPoller:
 
     def _on_realtime_message(self, event: Dict[str, Any]) -> None:
         try:
-            msg_wrapper = event.get("message", {}) if isinstance(event, dict) else {}
-            thread_id = str(msg_wrapper.get("thread_id") or event.get("thread_id") or "")
-            item_id = str(msg_wrapper.get("item_id") or event.get("item_id") or "")
-            user_id = str(msg_wrapper.get("user_id") or event.get("user_id") or "")
-            text = msg_wrapper.get("text") or event.get("text") or ""
-
-            if not text and isinstance(msg_wrapper.get("value"), dict):
-                val = msg_wrapper["value"]
-                text = val.get("text", "")
-                item_id = item_id or str(val.get("item_id", ""))
-                user_id = user_id or str(val.get("user_id", ""))
-
-            if not text or not str(user_id).strip():
+            incoming = parse_realtime_event(event)
+            if incoming is None:
                 return
-
-            self._process_message(thread_id, user_id, item_id, text)
+            self._process_message(incoming.thread_id, incoming.sender_pk, incoming.item_id, incoming.text)
         except Exception as e:
             logger.error(f"即時推播處理異常: {e}")
             log_error(e, context="BotPoller._on_realtime_message", logger_name="bestieAI.bot_poller")
 
-
-    # ==================== 背景任務隊列 Worker ====================
-
-    def _start_queue_worker(self) -> None:
-        if self._worker_thread is None or not self._worker_thread.is_alive():
-            self._worker_thread = threading.Thread(target=self._task_worker_loop, daemon=True)
-            self._worker_thread.start()
-            logger.info("背景任務 Worker 執行緒已啟動。")
-
-    def _task_worker_loop(self) -> None:
-        import random
-        while self.running:
-            try:
-                task = self._task_queue.get(timeout=2.0)
-            except queue.Empty:
-                continue
-
-            self._current_task = task
-            target = task["target"]
-            max_amt = task["max_amount"]
-            thread_id = task["thread_id"]
-            start_ts = time.time()
-
-            logger.info(f"[Worker] 開始處理排程任務：{target}（上限 {max_amt} 則）")
-            set_worker_status({
-                "running": True,
-                "target": target,
-                "mode": "安全慢速全量抓取",
-                "max_amount": max_amt,
-                "start_time": start_ts,
-                "pages": 0,
-                "count": 0,
-                "queue": self._get_queued_targets(),
-                "last_update": datetime.now(timezone.utc).isoformat()
-            })
-
-            def on_full_progress(*args, **kwargs):
-                if len(args) == 2 and isinstance(args[0], int) and isinstance(args[1], int):
-                    count, pages = args
-                    set_worker_status({
-                        "running": True,
-                        "target": target,
-                        "mode": "全量抓取",
-                        "max_amount": max_amt,
-                        "start_time": start_ts,
-                        "pages": pages,
-                        "count": count,
-                        "detail": f"爬取歷史私訊中: 第 {pages} 頁 (累計 {count} 則)",
-                        "queue": self._get_queued_targets(),
-                        "last_update": datetime.now(timezone.utc).isoformat()
-                    })
-                    logger.info(f"[Worker] {target} 慢速爬取進度：第 {pages} 頁，累計 {count} 則")
-                elif len(args) >= 1 and isinstance(args[0], str):
-                    detail_msg = args[0]
-                    set_worker_status({
-                        "running": True,
-                        "target": target,
-                        "mode": "全量抓取",
-                        "max_amount": max_amt,
-                        "start_time": start_ts,
-                        "detail": detail_msg,
-                        "queue": self._get_queued_targets(),
-                        "last_update": datetime.now(timezone.utc).isoformat()
-                    })
-                    logger.info(f"[Worker] {target} 全量抓取進度：{detail_msg}")
-
-            try:
-                self._get_main_ig()
-                adapter = SourceAdapterFactory.create("instagram", ig_client=self.main_ig)
-                info = self.ingestion.run_full_ingestion(
-                    adapter,
-                    target,
-                    max_amount=max_amt,
-                    progress_callback=on_full_progress
-                )
-                set_active_contact(target)
-                elapsed_min = int((time.time() - start_ts) // 60)
-                set_worker_status({
-                    "running": False,
-                    "target": target,
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
-                    "total_downloaded": info['downloaded_messages'],
-                    "elapsed_min": elapsed_min,
-                    "queue": self._get_queued_targets()
-                })
-                reply_text = (
-                    f"{target} 歷史紀錄匯入完成（耗時 {elapsed_min} 分鐘）\n"
-                    f"下載: {info['downloaded_messages']} 則 / 新增: {info['new_inserted_messages']} 則 / 總量: {info['total_messages_in_db']} 則\n"
-                    f"重構事件記憶: {info['chunks_rebuilt']} 條 / 關係摘要卡已更新"
-                )
-            except Exception as ex:
-                logger.error(f"[Worker] 全量抓取 {target} 失敗: {ex}")
-                log_error(ex, context=f"BotPoller._task_worker_loop — 全量抓取 {target}", logger_name="bestieAI.bot_poller")
-                set_worker_status({
-                    "running": False,
-                    "target": target,
-                    "error": str(ex),
-                    "failed_at": datetime.now(timezone.utc).isoformat(),
-                    "queue": self._get_queued_targets()
-                })
-                reply_text = f"全量抓取 {target} 失敗: {ex}"
-
-            if self.bot_ig and thread_id:
-                try:
-                    self.bot_ig.send_message(thread_id, reply_text)
-                except Exception as send_err:
-                    logger.warning(f"發送完成通知失敗: {send_err}")
-
-            self._current_task = None
-            self._task_queue.task_done()
-
-            if not self._task_queue.empty():
-                cooldown = random.uniform(60.0, 120.0)
-                logger.info(f"[Worker] 任務 {target} 完成，安全冷卻 {cooldown:.1f} 秒後執行下一任務...")
-                time.sleep(cooldown)
-
-    def _get_queued_targets(self) -> List[str]:
-        with self._task_queue.mutex:
-            return [t["target"] for t in list(self._task_queue.queue)]
-
     # ==================== 訊息接收與分發 ====================
 
     @require_whitelist
-    def _process_message(self, thread_id: str, user_id: str, item_id: str, text: str) -> None:
+    def _process_message(self, thread_id: str, sender_pk: str, item_id: str, text: str) -> None:
         if not text or not thread_id:
             return
 
         if item_id and not self._mark_seen(item_id):
             return
 
-        logger.info(f"[Realtime Push] 收到授權發訊者 ({user_id}) 訊息: {text}")
+        user_id = self.resolver.resolve(sender_pk)
+        logger.info(f"[Realtime Push] 收到發訊者 (pk={sender_pk}, user_id={user_id}) 訊息: {text}")
         try:
-            result = self.router.handle_message_structured(text, sender_pk=user_id)
+            result = self.router.handle_message_structured(text, sender_pk=sender_pk, user_id=user_id)
         except Exception as e:
             logger.error(f"處理訊息時發生未預期錯誤: {e}")
             log_error(e, context="BotPoller._process_message", logger_name="bestieAI.bot_poller")
-            if self.bot_ig:
-                self.bot_ig.send_message(thread_id, f"系統暫時忙碌或發生錯誤：{e}")
+            self._notify(thread_id, f"系統暫時忙碌或發生錯誤：{e}")
             return
 
         if not self.bot_ig:
             return
+        self.dispatcher.dispatch(result, user_id, thread_id)
 
-        action = result.action_type
-
-        if action == "TRACK_REQUEST":
-            target = result.data.get("target", "")
-            amount = result.data.get("amount", settings.TRACK_DEFAULT_LIMIT)
-            self.bot_ig.send_message(thread_id, f"開始抓取與 {target} 的歷史訊息（上限 {amount} 則）...")
-            try:
-                self._get_main_ig()
-                adapter = SourceAdapterFactory.create("instagram", ig_client=self.main_ig)
-                with self._ingestion_activity():
-                    info = self.ingestion.run_ingestion(adapter, target, amount=amount)
-                set_active_contact(target)
-                reply_text = f"已追蹤 {target}，匯入 {info['inserted_messages']} 則訊息，關係摘要卡已建立。"
-
-            except Exception as ex:
-                logger.error(f"Ingestion 失敗: {ex}")
-                log_error(ex, context=f"BotPoller.TRACK_REQUEST — {target}", logger_name="bestieAI.bot_poller")
-                reply_text = f"追蹤 {target} 失敗: {ex}"
-            self.bot_ig.send_message(thread_id, reply_text)
-
-        elif action == "TRACK_FULL_REQUEST":
-            target = result.data.get("target", "")
-            max_amt = result.data.get("max_amount", 0)
-            amt_label = f"上限 {max_amt} 則" if max_amt > 0 else "無限制"
-
-            self._start_queue_worker()
-
-            if self._current_task and self._current_task.get("target") == target:
-                w_status = get_worker_status()
-                pages = w_status.get("pages", 0) if w_status else 0
-                count = w_status.get("count", 0) if w_status else 0
-                self.bot_ig.send_message(
-                    thread_id,
-                    f"已有相同任務進行中：{target} 全量抓取中（目前第 {pages} 頁 / {count} 則），請稍候完成。"
-                )
-                return
-
-            queued = self._get_queued_targets()
-            if target in queued:
-                pos = queued.index(target) + 1
-                self.bot_ig.send_message(
-                    thread_id,
-                    f"{target} 已在排程名單中（排隊順位: {pos}），前項任務完成後將自動執行。"
-                )
-                return
-
-            if self._current_task is not None:
-                self._task_queue.put({"target": target, "max_amount": max_amt, "thread_id": thread_id})
-                queued = self._get_queued_targets()
-                pos = len(queued)
-                self.bot_ig.send_message(
-                    thread_id,
-                    f"目前正在抓取 {self._current_task.get('target')}，已將 {target} 加入排程（順位: {pos}）。\n"
-                    f"將於前一任務完成且安全冷卻後自動啟動。"
-                )
-                return
-
-            self._task_queue.put({"target": target, "max_amount": max_amt, "thread_id": thread_id})
-            self.bot_ig.send_message(
-                thread_id,
-                f"已開始抓取 {target} 歷史紀錄（{amt_label}）。\n"
-                f"採慢速防風控模式，完成會通知。\n"
-                f"可輸入 status 查詢進度。"
-            )
-
-        elif action == "REFRESH_SUMMARY_REQUEST":
-            target = result.data.get("target", "")
-            self.bot_ig.send_message(thread_id, f"正在重新分析並更新 {target} 的人物關係摘要卡...")
-            try:
-                from app.storage.db import get_contact_by_username
-                contact = get_contact_by_username(target)
-                if not contact:
-                    reply_text = f"找不到對象 {target}，請確認是否已 track。"
-                else:
-                    new_summary = self.ingestion.check_and_update_summary(contact["id"], force=True)
-                    if new_summary:
-                        reply_text = f"【{target} 摘要卡更新完成】\n{new_summary}"
-                    else:
-                        reply_text = f"{target} 尚無對話紀錄可生成摘要卡。"
-            except Exception as ex:
-                logger.error(f"更新摘要卡失敗: {ex}")
-                log_error(ex, context=f"BotPoller.REFRESH_SUMMARY_REQUEST — {target}", logger_name="bestieAI.bot_poller")
-                reply_text = f"更新 {target} 摘要卡失敗: {ex}"
-            self.bot_ig.send_message(thread_id, reply_text)
-
-        elif action == "SUMMARIZE_HISTORY_REQUEST":
-            target = result.data.get("target", "")
-            self.bot_ig.send_message(
-                thread_id,
-                f"已在背景啟動 {target} 全景深度復盤分析。\n"
-                f"正在統整全量歷史對話並生成 7 大維度長文，完成時會發送通知。"
-            )
-
-            def _async_full_summary():
-                start_ts = time.time()
-                set_worker_status({
-                    "running": True,
-                    "target": target,
-                    "mode": "全景復盤分析",
-                    "start_time": start_ts,
-                    "detail": "正統整全量歷史對話並提煉深度長文中...",
-                    "last_update": datetime.now(timezone.utc).isoformat()
-                })
-
-                def on_summary_progress(detail_msg: str):
-                    set_worker_status({
-                        "running": True,
-                        "target": target,
-                        "mode": "全景復盤分析",
-                        "start_time": start_ts,
-                        "detail": detail_msg,
-                        "last_update": datetime.now(timezone.utc).isoformat()
-                    })
-                    logger.info(f"[Summary Progress] {target}: {detail_msg}")
-
-                try:
-                    info = self.ingestion.build_full_history_summary(target, progress_callback=on_summary_progress)
-                    elapsed_min = int((time.time() - start_ts) // 60)
-                    set_worker_status({
-                        "running": False,
-                        "target": target,
-                        "completed_at": datetime.now(timezone.utc).isoformat(),
-                        "detail": f"全景復盤完成 (共 {info['total_messages']} 則對話)"
-                    })
-                    reply_text = (
-                        f"【{target} 全景關係復盤完成】（共 {info['total_messages']} 則對話，耗時約 {elapsed_min} 分鐘）\n\n"
-                        f"💡 7 大章節長文已保存，日常對話卡片已同步更新！\n"
-                        f"可輸入「card full」查看完整長篇復盤內容。"
-                    )
-                except Exception as ex:
-                    logger.error(f"全景歷史摘要失敗: {ex}")
-                    log_error(ex, context=f"BotPoller._async_full_summary — {target}", logger_name="bestieAI.bot_poller")
-                    set_worker_status({
-                        "running": False,
-                        "target": target,
-                        "error": str(ex),
-                        "failed_at": datetime.now(timezone.utc).isoformat()
-                    })
-                    reply_text = f"全景歷史摘要失敗: {ex}"
-
-                if self.bot_ig and thread_id:
-                    try:
-                        self.bot_ig.send_message(thread_id, reply_text)
-                    except Exception as send_err:
-                        logger.warning(f"發送完成通知失敗: {send_err}")
-
-            threading.Thread(target=_async_full_summary, daemon=True).start()
-
-        elif action == "SYNC_REQUEST":
-            target = result.data.get("target", "")
-            self.bot_ig.send_message(thread_id, f"同步 {target} 最新訊息中...")
-            set_worker_status({
-                "running": True,
-                "target": target,
-                "mode": "增量同步",
-                "start_time": time.time(),
-                "detail": f"正在同步 {target} 最新私訊...",
-                "last_update": datetime.now(timezone.utc).isoformat()
-            })
-            try:
-                self._get_main_ig()
-                adapter = SourceAdapterFactory.create("instagram", ig_client=self.main_ig)
-                with self._ingestion_activity():
-                    sync_info = self.ingestion.sync_messages(adapter, target)
-                summary_msg = "（摘要卡已更新）" if sync_info["summary_updated"] else ""
-                reply_text = f"同步完成：新增 {sync_info['new_messages_count']} 則訊息，提煉 {sync_info['chunks_added']} 條事件記憶。{summary_msg}"
-                set_worker_status({
-                    "running": False,
-                    "target": target,
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
-                    "detail": f"同步完成: 新增 {sync_info['new_messages_count']} 則訊息"
-                })
-            except Exception as ex:
-                logger.error(f"同步失敗: {ex}")
-                log_error(ex, context=f"BotPoller.SYNC_REQUEST — {target}", logger_name="bestieAI.bot_poller")
-                reply_text = f"同步 {target} 失敗: {ex}"
-                set_worker_status({
-                    "running": False,
-                    "target": target,
-                    "error": str(ex),
-                    "failed_at": datetime.now(timezone.utc).isoformat()
-                })
-            self.bot_ig.send_message(thread_id, reply_text)
-
-        elif action == "REBUILD_VECTORS_REQUEST":
-            target = result.data.get("target", "")
-            self.bot_ig.send_message(
-                thread_id,
-                f"已在背景啟動 {target} 向量庫重建。\n"
-                f"系統將採用批次斷點續傳提煉記憶，完成時會發送通知。\n"
-                f"期間可正常傳送訊息或使用 status 查詢進度。"
-            )
-
-            def _async_rebuild():
-                start_ts = time.time()
-                set_worker_status({
-                    "running": True,
-                    "target": target,
-                    "mode": "重建向量庫",
-                    "start_time": start_ts,
-                    "detail": "準備讀取本地歷史對話紀錄...",
-                    "last_update": datetime.now(timezone.utc).isoformat()
-                })
-
-                def on_rebuild_progress(detail_msg: str):
-                    set_worker_status({
-                        "running": True,
-                        "target": target,
-                        "mode": "重建向量庫",
-                        "start_time": start_ts,
-                        "detail": detail_msg,
-                        "last_update": datetime.now(timezone.utc).isoformat()
-                    })
-                    logger.info(f"[Rebuild Progress] {target}: {detail_msg}")
-
-                try:
-                    info = self.ingestion.rebuild_vectors(target, progress_callback=on_rebuild_progress)
-                    elapsed_min = int((time.time() - start_ts) // 60)
-                    set_worker_status({
-                        "running": False,
-                        "target": target,
-                        "completed_at": datetime.now(timezone.utc).isoformat(),
-                        "detail": f"重建完成 (共 {info['chunks_rebuilt']} 條記憶)"
-                    })
-                    reply_text = (
-                        f"【{target} 向量庫重建完成】（耗時約 {elapsed_min} 分鐘）\n"
-                        f"總訊息: {info['total_messages']} 則\n"
-                        f"提煉事件記憶: {info['chunks_rebuilt']} 條已寫入向量庫"
-                    )
-                except Exception as ex:
-                    logger.error(f"重建向量庫失敗: {ex}")
-                    log_error(ex, context=f"BotPoller._async_rebuild — {target}", logger_name="bestieAI.bot_poller")
-                    set_worker_status({
-                        "running": False,
-                        "target": target,
-                        "error": str(ex),
-                        "failed_at": datetime.now(timezone.utc).isoformat()
-                    })
-                    reply_text = f"重建 {target} 向量庫失敗: {ex}"
-
-                if self.bot_ig and thread_id:
-                    try:
-                        self.bot_ig.send_message(thread_id, reply_text)
-                    except Exception as send_err:
-                        logger.warning(f"發送完成通知失敗: {send_err}")
-
-            threading.Thread(target=_async_rebuild, daemon=True).start()
-
-        else:
-            try:
-                self.bot_ig.send_message(thread_id, result.message)
-            except Exception as se:
-                logger.error(f"發送回覆訊息失敗: {se}")
-                log_error(se, context="BotPoller._process_message.send_message", logger_name="bestieAI.bot_poller")
-
+    # ==================== 定期維護 ====================
 
     def _check_periodic_summaries(self) -> None:
         try:
             from app.storage.repositories import ContactRepository
-            contact_repo = ContactRepository()
-            rows = contact_repo.get_tracked_contacts(user_id=ALL_USERS)  # 背景排程需同步所有使用者追蹤中的對象
+            rows = ContactRepository().get_tracked_contacts(user_id=ALL_USERS)  # 保底排程涵蓋所有使用者
             for r in rows:
-                updated = self.ingestion.check_and_update_summary(r["id"])
-                if updated:
+                pipeline = self._ingestions.for_user(r["user_id"])
+                if pipeline.check_and_update_summary(r["id"]):
                     logger.info(f"自動保底更新了 {r['ig_account_id']} 的人物關係摘要卡。")
         except Exception as e:
             logger.error(f"定期檢查摘要更新失敗: {e}")
             log_error(e, context="BotPoller._check_periodic_summaries", logger_name="bestieAI.bot_poller")
 
+    # ==================== 主迴圈 ====================
 
     def run(self) -> None:
         logger.info("正在啟動 Bot 服務...")
@@ -701,7 +231,7 @@ class BotPoller:
             self.bot_client = self.session_manager.login("bot")
             self.bot_ig = IGClient(self.bot_client)
             self._resolve_main_pk()
-            self._start_queue_worker()
+            self.worker.start()
         except Exception as e:
             logger.error(f"Bot 登入失敗: {e}")
             return
@@ -749,6 +279,8 @@ class BotPoller:
                 logger.error(f"MQTT 傳輸異常: {e}，等待 5 秒後重連...")
                 time.sleep(5)
                 self._reconnect_realtime()
+
+        self.worker.stop()
 
     def _fallback_poll_loop(self) -> None:
         logger.info("啟動備用安全輪詢模式...")

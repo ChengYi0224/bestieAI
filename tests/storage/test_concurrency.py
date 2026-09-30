@@ -21,9 +21,9 @@ def test_sqlite_concurrent_read_write(tmp_path):
     db_file = tmp_path / 'concurrent_test.db'
     init_db(db_file)
 
-    c1 = get_or_create_contact('user_1', 'User 1', db_path=db_file)
-    c2 = get_or_create_contact('user_2', 'User 2', db_path=db_file)
-    c3 = get_or_create_contact('user_3', 'User 3', db_path=db_file)
+    c1 = get_or_create_contact('user_1', 'User 1', db_path=db_file, user_id=1)
+    c2 = get_or_create_contact('user_2', 'User 2', db_path=db_file, user_id=1)
+    c3 = get_or_create_contact('user_3', 'User 3', db_path=db_file, user_id=1)
 
     errors = []
 
@@ -45,7 +45,7 @@ def test_sqlite_concurrent_read_write(tmp_path):
                     'running': True,
                     'target': f'user_{(i % 3) + 1}',
                     'detail': f'worker {worker_id} writing {i}'
-                }, db_path=db_file)
+                }, 1, db_path=db_file)
         except Exception as e:
             errors.append((worker_id, 'writer', e))
 
@@ -54,8 +54,8 @@ def test_sqlite_concurrent_read_write(tmp_path):
             for i in range(25):
                 cid = [c1, c2, c3][i % 3]
                 get_recent_messages(cid, limit=5, db_path=db_file)
-                get_worker_status(db_path=db_file)
-                get_active_contact(db_path=db_file)
+                get_worker_status(1, db_path=db_file)
+                get_active_contact(1, db_path=db_file)
         except Exception as e:
             errors.append((worker_id, 'reader', e))
 

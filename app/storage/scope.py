@@ -1,7 +1,9 @@
 """
 scope.py — 租戶範圍（user scope）標記，供 Repository 與相容轉接層共用。
 """
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
+
+from app.core.config import settings
 
 
 class _AllUsers:
@@ -22,3 +24,13 @@ def scope_clause(user_id: UserScope) -> Tuple[str, tuple]:
     if isinstance(user_id, bool) or not isinstance(user_id, int):
         raise TypeError(f"user_id 必須為 int 或 ALL_USERS，收到 {user_id!r}")
     return "user_id = ?", (user_id,)
+
+
+def vector_tenant(user_id: Optional[int]) -> Optional[int]:
+    """
+    向量庫的租戶參數：擁有者沿用既有未加後綴、無 user_id metadata 的集合（相容舊資料），
+    其他使用者使用獨立集合 (chat_chunks_<id>) 並以 metadata 過濾。
+    """
+    if user_id is None or user_id == settings.OWNER_USER_ID:
+        return None
+    return user_id

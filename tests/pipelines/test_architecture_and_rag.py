@@ -74,8 +74,8 @@ def test_shared_query_embedding_in_memory_service(tmp_path):
     """驗證 MemoryManager 在查詢多個庫時只計算 1 次 Embedding 向量。"""
     db_file = tmp_path / "shared_emb.db"
     init_db(db_file)
-    cid = get_or_create_contact("eva_user", "Eva", db_path=db_file)
-    set_active_contact("eva_user", db_path=db_file)
+    cid = get_or_create_contact("eva_user", "Eva", db_path=db_file, user_id=1)
+    set_active_contact("eva_user", 1, db_path=db_file)
 
     mock_vector = MagicMock()
     fake_embedding = [0.5] * 768
@@ -132,8 +132,8 @@ def test_card_and_card_full_commands(tmp_path):
     """驗證 card 回傳日常輕量摘要卡，card full 回傳全景深度長文。"""
     db_file = tmp_path / "card_test.db"
     init_db(db_file)
-    cid = get_or_create_contact("frank", "Frank", db_path=db_file)
-    set_active_contact("frank", db_path=db_file)
+    cid = get_or_create_contact("frank", "Frank", db_path=db_file, user_id=1)
+    set_active_contact("frank", 1, db_path=db_file)
 
     contact_repo = ContactRepository(db_path=db_file)
     contact_repo.update_summary(cid, "這是日常輕量摘要卡（300字）")
@@ -180,10 +180,10 @@ def test_repositories_crud(tmp_path):
     b_repo = BotStateRepository(db_path=db_file)
 
     # ContactRepository
-    cid = c_repo.get_or_create("user_test", "Test User")
+    cid = c_repo.get_or_create("user_test", "Test User", user_id=1)
     assert cid > 0
-    c_repo.set_active("user_test")
-    active = c_repo.get_active()
+    c_repo.set_active("user_test", user_id=1)
+    active = c_repo.get_active(user_id=1)
     assert active["ig_account_id"] == "user_test"
 
     # MessageRepository
@@ -196,8 +196,8 @@ def test_repositories_crud(tmp_path):
     assert recent[0]["content"] == "你好"
 
     # BotStateRepository
-    b_repo.set_worker_status({"running": True, "target": "user_test"})
-    status = b_repo.get_worker_status()
+    b_repo.set_worker_status({"running": True, "target": "user_test"}, user_id=1)
+    status = b_repo.get_worker_status(user_id=1)
     assert status["running"] is True
     assert status["target"] == "user_test"
 

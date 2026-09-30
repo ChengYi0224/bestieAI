@@ -27,8 +27,8 @@ class Settings(BaseSettings):
     # 主帳號 Instagram User ID (PK)，用於白名單鑑權；若未設定則啟動時自動透過 API 解析
     MAIN_ACCOUNT_USER_ID: str = ""
 
-    # IG Bot 指令所屬的使用者 ID：Bot 目前是單一擁有者模型，指令只會存取此使用者的聯絡人
-    BOT_USER_ID: int = 1
+    # 主帳號（擁有者）對應的 users.id：Bot 收到主帳號私訊時以此身分執行；其他人依 users.ig_pk 綁定對應
+    OWNER_USER_ID: int = 1
 
     # Bot 帳號（負責陪聊與接收指令的專用 IG 帳號）
     BOT_ACCOUNT_USERNAME: str = ""

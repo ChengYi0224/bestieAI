@@ -35,9 +35,11 @@ PIPELINE (L1):
 - 負責對話重建與向量庫同步（rebuild_vectors）。
 """
 import logging
+import threading
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 
+from app.storage.scope import vector_tenant
 from app.utils.progress import notify_progress
 from app.core.config import settings
 from app.core.error_logger import log_error
@@ -46,7 +48,7 @@ from app.storage.chroma_store import ChromaStore
 from app.utils import parse_time_str, cosine_similarity, clean_message_text, format_chat_messages
 
 from app.storage.db import (
-    get_active_contact,
+    get_contact_by_id,
     get_messages,
     update_contact_summary,
     save_contact_events,
@@ -86,8 +88,11 @@ class IngestionPipeline:
         clusterer: Optional[Any] = None,
         consolidator: Optional[Any] = None,
         summarizer: Optional[Any] = None,
+        user_id: Optional[int] = None,
     ):
-        self.vector_store = vector_store or ChromaStore()
+        # 此 Pipeline 服務的租戶：聯絡人建立 / 查詢與向量庫分區都以它為準（未指定視為擁有者）
+        self.user_id: int = user_id if user_id is not None else settings.OWNER_USER_ID
+        self.vector_store = vector_store or ChromaStore(user_id=vector_tenant(self.user_id))
         self.llm_client = llm_client
         self.gemini_client = gemini_client or GeminiClient()
 
@@ -346,7 +351,6 @@ class IngestionPipeline:
         """向後相容轉發：呼叫 Summarizer 或相容 mock llm_client。支援 username 字串或 contact_id 整數。"""
         from app.storage.db import (
             get_contact_by_username,
-            get_contact_by_id,
             should_update_summary,
             get_recent_messages,
             get_contact_events,
@@ -354,7 +358,7 @@ class IngestionPipeline:
         )
         cid = contact_id
         if isinstance(contact_id, str):
-            row = get_contact_by_username(contact_id, db_path=db_path)
+            row = get_contact_by_username(contact_id, db_path=db_path, user_id=self.user_id)
             if not row:
                 return None
             cid = row["id"]
@@ -427,19 +431,18 @@ class IngestionPipeline:
         target_username = str(contact_id)
         if isinstance(contact_id, str):
             from app.storage.db import get_contact_by_username
-            row = get_contact_by_username(contact_id, db_path=db_path)
+            row = get_contact_by_username(contact_id, db_path=db_path, user_id=self.user_id)
             if not row:
                 logger.warning(f"聯絡人不存在: {contact_id}")
                 return {"contact_id": 0, "target_username": contact_id, "total_messages": 0, "chunks_rebuilt": 0}
             cid = row["id"]
             target_username = row["ig_account_id"]
         else:
-            from app.storage.db import get_contact_by_id
             row = get_contact_by_id(cid, db_path=db_path)
             if row:
                 target_username = row["ig_account_id"]
 
-        contact = get_active_contact(contact_id=cid, db_path=db_path)
+        contact = get_contact_by_id(cid, db_path=db_path)
         if not contact:
             logger.warning(f"聯絡人不存在: {cid}")
             return {"contact_id": cid, "target_username": target_username, "total_messages": 0, "chunks_rebuilt": 0}
@@ -533,7 +536,7 @@ class IngestionPipeline:
             for m in normalized_msgs
         ]
 
-        contact_id = get_or_create_contact(ig_account_id=target_username, display_name=target_username, db_path=db_path)
+        contact_id = get_or_create_contact(ig_account_id=target_username, display_name=target_username, db_path=db_path, user_id=self.user_id)
         inserted_count = save_messages(contact_id=contact_id, messages=processed_msgs, db_path=db_path)
 
         notify_progress(progress_callback, f"訊息匯入完成 ({len(normalized_msgs)} 則)，已存入資料庫，準備重建向量記憶...")
@@ -605,7 +608,7 @@ class IngestionPipeline:
         if actual_source is None:
             raise ValueError("必須提供 source 或 ig_client 參數。")
 
-        contact_id = get_or_create_contact(ig_account_id=target_username, display_name=target_username, db_path=db_path)
+        contact_id = get_or_create_contact(ig_account_id=target_username, display_name=target_username, db_path=db_path, user_id=self.user_id)
         existing_ids = get_latest_item_ids(contact_id=contact_id, limit=50, db_path=db_path)
 
         from app.sources.base import BaseSourceAdapter
@@ -646,7 +649,7 @@ class IngestionPipeline:
         from app.storage.db import get_contact_by_username, get_all_messages, update_contact_summary
         notify_progress(progress_callback, f"正在讀取 {target_username} 之完整歷史對話紀錄...")
 
-        contact_row = get_contact_by_username(target_username, db_path=db_path)
+        contact_row = get_contact_by_username(target_username, db_path=db_path, user_id=self.user_id)
         if not contact_row:
             raise ValueError(f"尚未追蹤 {target_username}，請先使用 track 指令。")
 
@@ -675,3 +678,22 @@ class IngestionPipeline:
             "total_messages": len(all_msgs),
             "summary_card": full_summary,
         }
+
+
+class IngestionPipelinePool:
+    """依使用者提供獨立的 IngestionPipeline（各自的聯絡人租戶與向量庫分區）。"""
+
+    def __init__(self, override: Optional[IngestionPipeline] = None):
+        self._override = override  # 測試：所有使用者共用同一個實例
+        self._by_user: Dict[int, IngestionPipeline] = {}
+        self._lock = threading.Lock()
+
+    def for_user(self, user_id: int) -> IngestionPipeline:
+        if self._override is not None:
+            return self._override
+        with self._lock:
+            pipeline = self._by_user.get(user_id)
+            if pipeline is None:
+                pipeline = IngestionPipeline(user_id=user_id)
+                self._by_user[user_id] = pipeline
+            return pipeline

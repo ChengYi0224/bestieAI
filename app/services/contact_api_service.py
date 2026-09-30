@@ -1,12 +1,11 @@
 """contact_api_service.py — 聯絡人管理與主動操作業務邏輯服務。"""
 import logging
 import sqlite3
-from typing import Optional, Dict, Any
+from typing import Callable, Optional, Dict, Any
 
 from app.storage.repositories.contacts import ContactRepository
+from app.services.ig_pool import IGClientPool, IGSessionUnavailable
 from app.services.ingestion_service import IngestionPipeline
-from app.services.session_service import SessionManager
-from app.services.ig_service import IGClient
 from app.sources.factory import SourceAdapterFactory
 
 logger = logging.getLogger("bestieAI.api.contact_service")
@@ -19,12 +18,18 @@ class ContactApiService:
         self,
         contact_repo: ContactRepository,
         ingestion: Optional[IngestionPipeline] = None,
-        session_manager: Optional[SessionManager] = None,
+        ig_pool: Optional[IGClientPool] = None,
+        ingestion_for: Optional[Callable[[int], IngestionPipeline]] = None,
     ):
+        """
+        ingestion_for: 依 user_id 取得該使用者專屬的 IngestionPipeline（建議）；
+        ingestion: 所有使用者共用同一個 Pipeline（僅測試用）。
+        ig_pool: 依 user_id 取得該使用者自己的 IG 連線，不會借用其他使用者（含擁有者）的帳號。
+        """
         self.contact_repo = contact_repo
-        self.ingestion = ingestion
-        self.session_manager = session_manager
-        self._ig_client: Optional[IGClient] = None
+        self.ig_pool = ig_pool
+        self._ingestion_for = ingestion_for or ((lambda _uid: ingestion) if ingestion else None)
+        self.ingestion = ingestion  # 向後相容屬性
 
     def list_contacts(self, status: Optional[str] = None, user_id: Optional[int] = None) -> list[sqlite3.Row]:
         """取得聯絡人清單，支援狀態篩選與使用者隔離。"""
@@ -72,28 +77,27 @@ class ContactApiService:
         )
 
         inserted_count = 0
-        if self.ingestion:
+        queued_reason = "待排程匯入"
+        if self._ingestion_for and self.ig_pool:
             try:
-                if self._ig_client is None and self.session_manager:
-                    client = self.session_manager.login("main")
-                    self._ig_client = IGClient(client)
-
-                if self._ig_client:
-                    adapter = SourceAdapterFactory.create("instagram", ig_client=self._ig_client)
-                    info = self.ingestion.run_ingestion(adapter, clean_target, amount=limit)
-                    inserted_count = info.get("inserted_messages", 0)
-                    return {
-                        "status": "success",
-                        "message": f"成功追蹤 @{clean_target}，匯入 {inserted_count} 則訊息",
-                        "contact_id": contact_id,
-                        "inserted_messages": inserted_count,
-                    }
+                ig = self.ig_pool.get(user_id)  # 該使用者自己的 IG 連線
+                adapter = SourceAdapterFactory.create("instagram", ig_client=ig)
+                info = self._ingestion_for(user_id).run_ingestion(adapter, clean_target, amount=limit)
+                inserted_count = info.get("inserted_messages", 0)
+                return {
+                    "status": "success",
+                    "message": f"成功追蹤 @{clean_target}，匯入 {inserted_count} 則訊息",
+                    "contact_id": contact_id,
+                    "inserted_messages": inserted_count,
+                }
+            except IGSessionUnavailable as e:
+                queued_reason = str(e)
             except Exception as e:
                 logger.warning(f"追蹤即時抓取私訊失敗，轉為佇列等待: {e}")
 
         return {
             "status": "queued",
-            "message": f"已建立追蹤對象 @{clean_target}，待排程匯入",
+            "message": f"已建立追蹤對象 @{clean_target}，{queued_reason}",
             "contact_id": contact_id,
             "inserted_messages": inserted_count,
         }
@@ -112,9 +116,9 @@ class ContactApiService:
         summary_updated = False
         events_extracted = 0
 
-        if self.ingestion:
+        if self._ingestion_for:
             try:
-                new_summary = self.ingestion.check_and_update_summary(contact_id, force=True)
+                new_summary = self._ingestion_for(user_id).check_and_update_summary(contact_id, force=True)
                 if new_summary:
                     summary_card = new_summary
                     summary_updated = True
