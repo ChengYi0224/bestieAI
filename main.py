@@ -15,6 +15,7 @@ import typer
 import uvicorn
 
 from app.storage.db import init_db
+from app.core.config import settings
 from app.core.error_logger import get_error_logger
 
 logging.basicConfig(
@@ -65,6 +66,7 @@ def default(ctx: typer.Context) -> None:
     if ctx.invoked_subcommand is not None:
         return
     print("=== bestieAI 啟動（Bot + API）===")
+    settings.validate_security()
     init_db()
     bot_thread = threading.Thread(target=_run_bot, daemon=True, name="BotPoller")
     bot_thread.start()
@@ -75,6 +77,7 @@ def default(ctx: typer.Context) -> None:
 def bot() -> None:
     """僅啟動 IG Bot Poller。"""
     print("=== bestieAI 啟動（Bot only）===")
+    settings.validate_security()
     init_db()
     _run_bot()
 
@@ -86,6 +89,7 @@ def api(
 ) -> None:
     """僅啟動 REST API Server。"""
     print("=== bestieAI 啟動（API only）===")
+    settings.validate_security()
     init_db()
     _run_api(host=host, port=port)
 

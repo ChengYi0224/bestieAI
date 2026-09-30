@@ -71,7 +71,7 @@ class AuthApiService:
     def authenticate_with_password(self, username_or_email: str, password: str) -> Optional[sqlite3.Row]:
         """使用原生帳號或信箱搭配密碼進行身分驗證。"""
         if not username_or_email or not password:
-            return False
+            return None
 
         clean_id = username_or_email.strip()
         user = self.user_repo.get_by_username(clean_id) or self.user_repo.get_by_email(clean_id)
@@ -80,34 +80,36 @@ class AuthApiService:
             if self.verify_password(password, user["password_hash"]):
                 return user
 
-        # 向後相容：比對 API_SECRET 或主帳號密碼（預設管理者身分）
-        valid_secrets = [s for s in [self.secret_key, settings.MAIN_ACCOUNT_PASSWORD] if s]
-        for secret in valid_secrets:
-            if secrets.compare_digest(password, secret):
-                admin_user = self.user_repo.get_by_id(1)
-                if admin_user:
-                    return admin_user
+        # 管理者(user 1) 專用密碼：需同時符合管理者帳號 / 信箱；ADMIN_PASSWORD 留空則停用
+        if settings.ADMIN_PASSWORD:
+            admin_user = self.user_repo.get_by_id(1)
+            if admin_user and clean_id.lower() in {
+                str(admin_user["username"] or "").lower(),
+                str(admin_user["email"] or "").lower(),
+            } and secrets.compare_digest(password, settings.ADMIN_PASSWORD):
+                return admin_user
 
         return None
-
-    def authenticate_user(self, username: str, password: str) -> bool:
-        """向後相容判斷：驗證使用者帳密是否合法。"""
-        return self.authenticate_with_password(username, password) is not None
 
     def authenticate_with_google(self, id_token_str: str) -> sqlite3.Row:
         """驗證 Google ID Token 並依優先序綁定管理者、現有用戶或自動註冊新帳號。"""
         audiences = settings.google_client_ids_list
+        if not audiences:
+            # audience=None 會接受任何 Google 應用簽發的 token，必須明確設定 Client ID
+            raise ValueError("伺服器未設定 GOOGLE_CLIENT_ID，無法驗證 Google 登入")
         try:
             id_info = google_id_token.verify_oauth2_token(
                 id_token_str,
                 google_requests.Request(),
-                audience=audiences if audiences else None,
+                audience=audiences,
             )
         except Exception as e:
             raise ValueError(f"Google Token 驗證失敗: {e}")
 
         google_sub = str(id_info.get("sub", "")).strip()
-        email = str(id_info.get("email", "")).strip() if id_info.get("email") else None
+        # 未經 Google 驗證的信箱不可用於帳號綁定或管理者比對
+        email_verified = id_info.get("email_verified") is True
+        email = str(id_info.get("email", "")).strip() if id_info.get("email") and email_verified else None
         name = str(id_info.get("name", "")).strip() if id_info.get("name") else None
         avatar_url = str(id_info.get("picture", "")).strip() if id_info.get("picture") else None
 
@@ -127,17 +129,11 @@ class AuthApiService:
             if admin_user:
                 return admin_user
 
-        # 3. 若同信箱之用戶已存在，綁定至該用戶
+        # 3. 同信箱已有原生帳號：原生註冊不驗證信箱，自動綁定會讓搶註冊者接管帳號，因此拒絕
         if email:
             existing_email_user = self.user_repo.get_by_email(email)
             if existing_email_user:
-                self.user_repo.link_google_sub(
-                    existing_email_user["id"],
-                    google_sub,
-                    avatar_url=avatar_url,
-                    email=email,
-                )
-                return self.user_repo.get_by_id(existing_email_user["id"])
+                raise ValueError("此信箱已被原生帳號使用，請改用帳號密碼登入")
 
         # 4. 全新 Google 使用者：自動建立新帳號
         base_username = email.split("@")[0] if email else f"google_user_{google_sub[:6]}"
@@ -185,8 +181,7 @@ class AuthApiService:
             try:
                 user_id = int(sub_raw)
             except ValueError:
-                # 相容舊版 subject 為 username 的 Token
-                user_id = 1
+                return None
 
             username = payload.get("username", "")
             return user_id, username

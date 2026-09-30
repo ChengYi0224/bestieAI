@@ -1,11 +1,23 @@
+import logging
 from pathlib import Path
-from pydantic import Field
+from typing import Optional
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_logger = logging.getLogger("bestieAI.config")
+
+# 公開在原始碼中的預設金鑰：僅允許 dev 環境使用
+INSECURE_DEFAULT_API_SECRET = "your-secure-secret-key-here"
+MIN_API_SECRET_LENGTH = 32
 
 
 class Settings(BaseSettings):
     """應用程式整體設定與調優參數配置。"""
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    # ==================== 執行環境 ====================
+    # dev：本機開發，允許預設金鑰並預設開啟 LLM 明文日誌；prod：啟動時強制檢查安全設定，LLM 日誌預設關閉
+    APP_ENV: str = Field(default="dev")
 
     # ==================== 帳號、憑證與金鑰（由 .env 載入） ====================
     # 主帳號（使用者本人）Instagram 帳號與密碼
@@ -60,8 +72,8 @@ class Settings(BaseSettings):
     # 錯誤日誌路徑（Rotating，5MB × 3 份）
     ERROR_LOG_PATH: Path = Field(default=Path("./logs/error.log"))
 
-    # 是否啟用 LLM 呼叫明文記錄（預設開啟，方便個人 debug 追蹤）
-    ENABLE_LLM_LOG: bool = Field(default=True)
+    # 是否啟用 LLM 呼叫明文記錄；未設定時 dev 開啟、prod 關閉（日誌含私訊明文）
+    ENABLE_LLM_LOG: Optional[bool] = Field(default=None)
 
     # Bot 私訊輪詢間隔（秒）
     POLL_INTERVAL_SECONDS: int = Field(default=15)
@@ -154,8 +166,11 @@ class Settings(BaseSettings):
         return [m.strip() for m in self.GEMINI_EVENT_EXTRACTION_MODELS.split(",") if m.strip()]
 
     # ==================== FastAPI REST API 設定 ====================
-    # API 認證金鑰
-    API_SECRET: str = Field(default="your-secure-secret-key-here")
+    # JWT 簽章金鑰（僅用於簽發 / 驗證 token，不可當密碼使用；prod 至少 32 字元且不可為預設值）
+    API_SECRET: str = Field(default=INSECURE_DEFAULT_API_SECRET)
+
+    # 管理者（user_id = 1）原生密碼登入用密碼；留空表示停用密碼登入（改用 Google 登入）
+    ADMIN_PASSWORD: str = Field(default="")
 
     # JWT Token 有效時數
     API_TOKEN_EXPIRE_HOURS: int = Field(default=24)
@@ -170,6 +185,37 @@ class Settings(BaseSettings):
 
     # 預設管理者 Google Email（登入時自動綁定至 user_id = 1）
     ADMIN_EMAIL: str = Field(default="")
+
+    @property
+    def is_prod(self) -> bool:
+        return self.APP_ENV.strip().lower() in ("prod", "production")
+
+    @model_validator(mode="after")
+    def _resolve_env_defaults(self) -> "Settings":
+        if self.ENABLE_LLM_LOG is None:
+            self.ENABLE_LLM_LOG = not self.is_prod
+        return self
+
+    def validate_security(self) -> None:
+        """啟動時呼叫。prod 遇到不安全設定直接拒絕啟動；dev 僅警告。"""
+        problems: list[str] = []
+        if self.API_SECRET == INSECURE_DEFAULT_API_SECRET:
+            problems.append("API_SECRET 仍為原始碼中的公開預設值，任何人都能偽造 JWT")
+        elif len(self.API_SECRET) < MIN_API_SECRET_LENGTH:
+            problems.append(f"API_SECRET 長度不足 {MIN_API_SECRET_LENGTH} 字元")
+        if self.ADMIN_PASSWORD and self.ADMIN_PASSWORD in (self.API_SECRET, self.MAIN_ACCOUNT_PASSWORD):
+            problems.append("ADMIN_PASSWORD 不可與 API_SECRET 或 IG 主帳號密碼相同")
+        if not self.google_client_ids_list:
+            problems.append("未設定任何 GOOGLE_CLIENT_ID_*，Google 登入將一律被拒絕")
+        if self.is_prod and self.ENABLE_LLM_LOG:
+            problems.append("prod 環境已開啟 ENABLE_LLM_LOG，私訊與 prompt 明文會寫入 logs/llm.log")
+
+        if not problems:
+            return
+        if self.is_prod:
+            raise RuntimeError("APP_ENV=prod 安全檢查未通過:\n- " + "\n- ".join(problems))
+        for msg in problems:
+            _logger.warning(f"[dev 安全提醒] {msg}")
 
     @property
     def google_client_ids_list(self) -> list[str]:

@@ -23,11 +23,13 @@ def create_app() -> FastAPI:
     origins = settings.cors_origins_list
     if not origins:
         origins = ["*"]
+    # 瀏覽器不允許 credentials 搭配萬用來源，fallback 為 "*" 時必須關閉
+    allow_credentials = "*" not in origins
 
     application.add_middleware(
         CORSMiddleware,
         allow_origins=origins,
-        allow_credentials=True,
+        allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
         expose_headers=["X-Total-Count"],
